@@ -1,90 +1,48 @@
 # BoltzDraw
 
-A free, open-source ChemDraw alternative built with Ketcher and RDKit.js. Draw molecular structures and see calculated properties in real-time.
+A browser-based molecular toolkit — draw structures, explore chemical space, and import from PDB. No installation, no backend.
 
-## Features
+## Modes
 
-- **Ketcher Molecule Editor**: Full-featured 2D molecular structure editor from EPAM
-- **Live Property Calculations**: Properties update instantly as you draw using RDKit.js
-- **Structure Preview**: RDKit renders SVG previews of each molecule in the properties panel
-- **Multiple Molecule Support**: Draw multiple disconnected fragments to see properties for each
-- **Drug-likeness Highlighting**: Properties violating Lipinski's rules are highlighted in yellow/red
-- **Collapsible Panel**: Maximize drawing space by collapsing the properties panel
-- **Copy SMILES**: One-click copy of SMILES strings
+| Mode | Description |
+|------|-------------|
+| **BoltzDraw** | 2D structure editor (Ketcher) with live property calculations |
+| **BoltzStar** | 3D structure viewer (Mol* / Molstar) — load by PDB ID or upload CIF/PDB |
+| **BoltzSpace** | Chemical space explorer — UMAP and t-SNE projections from a CSV of SMILES |
 
-## Calculated Properties
+## Analysis panel (BoltzDraw)
 
-| Property | Description |
-|----------|-------------|
-| MW | Molecular Weight |
-| cLogP | Calculated LogP (Crippen method) |
-| TPSA | Topological Polar Surface Area |
-| HBA | Hydrogen Bond Acceptors |
-| HBD | Hydrogen Bond Donors |
-| Fsp3 | Fraction of sp3 carbons |
-| RotB | Rotatable Bonds |
-| HAC | Heavy Atom Count |
-| Hetero | Heteroatom Count |
-| ArRings | Aromatic Ring Count |
-| Stereo | Defined Stereocenters |
-| Unspec | Unspecified Stereocenters |
+**Cards** — per-molecule property grid, updated as you draw. Lipinski violations highlighted in amber/red.
 
-## Usage
+| MW | cLogP | TPSA | HBA | HBD | Fsp3 | RotB | HAC | Hetero | ArRings | Stereo | Unspec |
 
-### GitHub Pages
+**pKa** — estimated pKa values with a pH distribution chart.
 
-1. Enable GitHub Pages in your repository settings
-2. Set source to main branch
-3. Access at `https://[username].github.io/BoltzDraw`
+**Export** — download the current canvas as PNG, SVG, CSV, or SDF. CSV and SDF include SMILES, molecule ID, and IUPAC name (fetched from PubChem). SMILES lists all structures inline with a copy-all button.
 
-### Local Development
+## Import panel (BoltzDraw)
 
-Serve via a local HTTP server (required for iframe to work):
+**Peptide** — convert a one-letter amino acid sequence to SMILES and load it into the editor. Supports all 20 canonical L-amino acids (uppercase), their D-forms (lowercase), and N/C terminal modifications (free, acetyl, formyl, palmitoyl / free acid, amide, methyl ester).
+
+**PDB** — enter a 4-character PDB accession code to fetch all small-molecule ligands from the RCSB. Each ligand is shown with its 2D structure, CCD code, name, and formula. Click **Import into Editor** to load it directly into Ketcher.
+
+## Running locally
+
+Requires a local HTTP server (needed for the Ketcher iframe and ES modules):
 
 ```bash
-# Python 3
-python -m http.server 8000
-
-# Node.js
-npx serve
+python3 -m http.server 4400
+# then open http://localhost:4400
 ```
 
-Then visit `http://localhost:8000`
+## Stack
 
-## Drawing Tips
-
-- Click and drag to draw bonds
-- Use the element toolbar to change atom types
-- Use templates for common ring structures
-- Draw disconnected fragments for multiple molecules
-- Use the eraser tool or select and delete to remove atoms/bonds
-
-## Drug-Likeness Rules (Lipinski's Rule of Five)
-
-Properties are color-coded based on oral bioavailability guidelines:
-- **Green**: Within guidelines
-- **Yellow**: Approaching limits
-- **Red**: Exceeds limits
-
-| Property | Warning | Alert |
-|----------|---------|-------|
-| MW | >450 | >500 |
-| cLogP | >4 | >5 |
-| TPSA | >120 | >140 |
-| HBA | >8 | >10 |
-| HBD | >4 | >5 |
-| RotB | >7 | >10 |
-
-## Technology Stack
-
-- [Ketcher](https://github.com/epam/ketcher) - Molecular structure editor by EPAM
-- [RDKit.js](https://github.com/rdkit/rdkit-js) - Cheminformatics toolkit for JavaScript
+- [Ketcher](https://github.com/epam/ketcher) — 2D structure editor (EPAM)
+- [RDKit.js](https://github.com/rdkit/rdkit-js) — property calculations and mol blocks (WebAssembly)
+- [Mol*](https://molstar.org/) — 3D structure viewer
+- [RCSB PDB API](https://data.rcsb.org) — PDB ligand data
+- [PubChem PUG REST](https://pubchem.ncbi.nlm.nih.gov/docs/pug-rest) — IUPAC names at export time
 
 ## License
 
-MIT License - free to use and modify.
-
-## Acknowledgments
-
-- EPAM for the excellent Ketcher editor
-- RDKit community for the JavaScript/WebAssembly port
+MIT

@@ -1,157 +1,124 @@
 /**
  * peptide.js
  *
- * Converts a single-letter amino acid sequence to a SMILES string and
- * loads it into the Ketcher editor.
+ * Peptide sequence → SMILES conversion (browser-side, no API).
+ * Supports all 20 canonical L-amino acids (uppercase) and
+ * their D-forms (lowercase), plus common N/C terminal modifications.
  *
- * Supports all 20 standard amino acids (ACDEFGHIKLMNPQRSTVWY).
- * Proline is handled specially because its backbone N is part of a ring.
- * Glycine has no stereocentre on its alpha carbon.
- * All other L-amino acids get [C@@H] stereochemistry at the alpha carbon.
- *
- * The generated SMILES is validated and canonicalised via RDKit before
- * being passed to Ketcher, so minor SMILES quirks never reach the editor.
+ * Algorithm: each residue contributes an N-Cα(sidechain)-C(=O) block;
+ * blocks are concatenated and capped with terminal groups.
  */
 
-import { loadMolecule } from './ketcher.js';
-
-/* ----------------------------------------------------------------
-   Amino acid side-chain fragments (attached at alpha carbon)
----------------------------------------------------------------- */
-const SIDE_CHAIN = {
-    A: 'C',                       // Alanine      — methyl
-    C: 'CS',                      // Cysteine     — thiomethyl
-    D: 'CC(=O)O',                 // Aspartate    — carboxymethyl
-    E: 'CCC(=O)O',                // Glutamate    — 2-carboxyethyl
-    F: 'Cc1ccccc1',               // Phenylalanine— benzyl
-    H: 'Cc1c[nH]cn1',             // Histidine    — 4-imidazolylmethyl
-    I: 'C(C)CC',                  // Isoleucine   — sec-butyl
-    K: 'CCCCN',                   // Lysine       — 4-aminobutyl
-    L: 'CC(C)C',                  // Leucine      — isobutyl
-    M: 'CCSC',                    // Methionine   — 2-(methylthio)ethyl
-    N: 'CC(=O)N',                 // Asparagine   — carbamidomethyl
-    Q: 'CCC(=O)N',                // Glutamine    — 3-carbamidopropyl
-    R: 'CCCNC(=N)N',              // Arginine     — 3-guanidinopropyl
-    S: 'CO',                      // Serine       — hydroxymethyl
-    T: 'C(O)C',                   // Threonine    — 1-hydroxyethyl
-    V: 'C(C)C',                   // Valine       — isopropyl
-    W: 'Cc1c[nH]c2ccccc12',       // Tryptophan   — 3-indolylmethyl
-    Y: 'Cc1ccc(O)cc1',            // Tyrosine     — 4-hydroxybenzyl
-    // G (Glycine) and P (Proline) handled separately below
+// ----------------------------------------------------------------
+// Amino acid SMILES blocks
+// Each entry is the N-Cα(sidechain) fragment; C(=O) is appended per residue.
+// L-amino acids = uppercase, D-amino acids = lowercase (flipped stereo).
+// ----------------------------------------------------------------
+const AA_BLOCKS = {
+    // L-forms
+    A: 'N[C@@H](C)',
+    G: 'NC',
+    V: 'N[C@@H](C(C)C)',
+    L: 'N[C@@H](CC(C)C)',
+    I: 'N[C@@H]([C@@H](CC)C)',
+    P: 'N1CCC[C@@H]1',
+    F: 'N[C@@H](Cc1ccccc1)',
+    W: 'N[C@@H](Cc1c[nH]c2ccccc12)',
+    M: 'N[C@@H](CCSC)',
+    S: 'N[C@@H](CO)',
+    T: 'N[C@@H]([C@@H](O)C)',
+    C: 'N[C@@H](CS)',
+    Y: 'N[C@@H](Cc1ccc(O)cc1)',
+    H: 'N[C@@H](Cc1cnc[nH]1)',
+    D: 'N[C@@H](CC(=O)O)',
+    E: 'N[C@@H](CCC(=O)O)',
+    N: 'N[C@@H](CC(N)=O)',
+    Q: 'N[C@@H](CCC(N)=O)',
+    K: 'N[C@@H](CCCCN)',
+    R: 'N[C@@H](CCCNC(=N)N)',
+    // D-forms (lowercase)
+    a: 'N[C@H](C)',
+    g: 'NC',
+    v: 'N[C@H](C(C)C)',
+    l: 'N[C@H](CC(C)C)',
+    i: 'N[C@H]([C@H](CC)C)',
+    p: 'N1CCC[C@H]1',
+    f: 'N[C@H](Cc1ccccc1)',
+    w: 'N[C@H](Cc1c[nH]c2ccccc12)',
+    m: 'N[C@H](CCSC)',
+    s: 'N[C@H](CO)',
+    t: 'N[C@H]([C@H](O)C)',
+    c: 'N[C@H](CS)',
+    y: 'N[C@H](Cc1ccc(O)cc1)',
+    h: 'N[C@H](Cc1cnc[nH]1)',
+    d: 'N[C@H](CC(=O)O)',
+    e: 'N[C@H](CCC(=O)O)',
+    n: 'N[C@H](CC(N)=O)',
+    q: 'N[C@H](CCC(N)=O)',
+    k: 'N[C@H](CCCCN)',
+    r: 'N[C@H](CCCNC(=N)N)',
 };
 
-const VALID_AA = new Set('ACDEFGHIKLMNPQRSTVWY'.split(''));
+// N-terminal prefix SMILES (prepended before first residue N)
+const N_TERMINAL = {
+    'free': '',
+    'ACT':  'CC(=O)',                   // Acetyl
+    'For':  'C(=O)',                    // Formyl
+    'C16':  'CCCCCCCCCCCCCCCC(=O)',     // Palmitoyl
+};
+
+// C-terminal suffix SMILES (appended after last residue's C(=O))
+const C_TERMINAL = {
+    'free': 'O',    // free carboxylic acid → C(=O)O
+    'AMD':  'N',    // amide              → C(=O)N
+    'OMe':  'OC',   // methyl ester       → C(=O)OC
+};
 
 /**
- * Build a linear peptide SMILES from a sequence of single-letter codes.
+ * Convert a one-letter amino acid sequence to SMILES.
  *
- * Chain pattern (L-amino acids):
- *   N [C@@H](R1) C(=O) N [C@@H](R2) C(=O) … N [C@@H](Rn) C(=O) O
- *
- * Glycine (G): no chiral centre → alpha carbon written as plain C
- * Proline (P): backbone N is ring atom → N<k>CCC[C@@H]<k> pattern
- *
- * @param {string} sequence  — single-letter amino acid codes (case-insensitive)
- * @returns {string|null}    — SMILES string, or null if no valid residues
+ * @param {string} sequence  — one-letter codes; uppercase = L, lowercase = D
+ * @param {string} nTerminal — key from N_TERMINAL ('free', 'ACT', 'For', 'C16')
+ * @param {string} cTerminal — key from C_TERMINAL ('free', 'AMD', 'OMe')
+ * @returns {{ smiles: string, warnings: string[] }}
+ * @throws {Error} if sequence contains unsupported residue codes
  */
-function _peptideToSmiles(sequence) {
-    // Filter to known amino acids only
-    const residues = sequence
-        .toUpperCase()
-        .split('')
-        .filter(aa => VALID_AA.has(aa));
+export function convertPeptideToSmiles(sequence, nTerminal = 'free', cTerminal = 'free') {
+    const cleaned = sequence.replace(/\s/g, '');
+    if (!cleaned.length) throw new Error('Sequence is empty');
 
-    if (residues.length === 0) return null;
-
-    let smiles = 'N';   // N-terminus free amine
-    let ringN  = 1;     // Proline ring label counter (safe to reuse after closure)
-
-    for (let i = 0; i < residues.length; i++) {
-        const aa     = residues[i];
-        const isLast = i === residues.length - 1;
-
-        if (aa === 'G') {
-            // Achiral alpha carbon — no branch needed, just CH2
-            smiles += 'CC(=O)';
-        } else if (aa === 'P') {
-            // Proline: the 'N' at the end of the previous fragment becomes the
-            // ring-nitrogen.  Append the ring label immediately after 'N'.
-            smiles += ringN + 'CCC[C@@H]' + ringN + 'C(=O)';
-            ringN++;
-        } else {
-            smiles += '[C@@H](' + SIDE_CHAIN[aa] + ')C(=O)';
-        }
-
-        // C-terminus: hydroxyl; elsewhere: peptide-bond nitrogen
-        smiles += isLast ? 'O' : 'N';
+    const residues = cleaned.split('');
+    const unknown  = residues.filter(r => !(r in AA_BLOCKS));
+    if (unknown.length) {
+        throw new Error(
+            `Unsupported residue code${unknown.length > 1 ? 's' : ''}: ` +
+            `${[...new Set(unknown)].join(', ')}. ` +
+            `Use uppercase for L-amino acids, lowercase for D-amino acids.`
+        );
     }
 
-    return smiles;
+    const prefix = N_TERMINAL[nTerminal] ?? '';
+    const suffix = C_TERMINAL[cTerminal] ?? 'O';
+
+    // Build linear chain: prefix + [N-Cα(sc)-C(=O)]×n + suffix
+    const chain  = residues.map(r => AA_BLOCKS[r] + 'C(=O)').join('');
+    const smiles = prefix + chain + suffix;
+
+    const warnings = [];
+    if (residues.length > 30) {
+        warnings.push(
+            'Long peptides (>30 residues) may exceed Ketcher rendering limits. ' +
+            'Consider breaking into fragments.'
+        );
+    }
+
+    return { smiles, warnings };
 }
 
-/* ----------------------------------------------------------------
-   UI wiring
----------------------------------------------------------------- */
-
-export function initPeptideBar(RDKit) {
-    const bar    = document.getElementById('peptide-bar');
-    const input  = document.getElementById('peptide-input');
-    const btn    = document.getElementById('peptide-convert-btn');
-    const status = document.getElementById('peptide-status');
-
-    if (!bar) return;
-
-    async function convert() {
-        const raw = input.value.trim();
-        if (!raw) return;
-
-        // Filter to valid residues so the count in the message is accurate
-        const valid = raw.toUpperCase().split('').filter(aa => VALID_AA.has(aa));
-        if (valid.length === 0) {
-            _setStatus('No valid amino acids found. Use single-letter codes (ACDEFGHIKLMNPQRSTVWY).', 'error');
-            return;
-        }
-
-        const rawSmiles = _peptideToSmiles(raw);
-        if (!rawSmiles) {
-            _setStatus('Conversion failed — check your sequence.', 'error');
-            return;
-        }
-
-        // Validate and canonicalise with RDKit
-        let smiles = rawSmiles;
-        try {
-            const mol = RDKit.get_mol(rawSmiles);
-            if (!mol || !mol.is_valid()) {
-                if (mol) mol.delete();
-                _setStatus('Could not parse the generated SMILES — please check for unsupported residues.', 'error');
-                return;
-            }
-            smiles = mol.get_smiles();
-            mol.delete();
-        } catch (e) {
-            // RDKit unavailable — proceed with raw SMILES (Ketcher will validate)
-        }
-
-        btn.disabled = true;
-        _setStatus('Loading…', 'loading');
-
-        try {
-            await loadMolecule(smiles);
-            _setStatus(`${valid.length}-residue peptide loaded`, 'success');
-        } catch (err) {
-            _setStatus('Failed to load: ' + err.message, 'error');
-        } finally {
-            btn.disabled = false;
-        }
-    }
-
-    btn.addEventListener('click', convert);
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') convert(); });
-
-    function _setStatus(msg, type) {
-        status.textContent = msg;
-        status.className   = 'peptide-status ' + type;
-        status.classList.remove('hidden');
-    }
+/**
+ * Return the set of valid one-letter codes this converter supports.
+ * @returns {Set<string>}
+ */
+export function supportedCodes() {
+    return new Set(Object.keys(AA_BLOCKS));
 }

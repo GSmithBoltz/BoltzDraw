@@ -9,11 +9,12 @@
  *   - Delegates pKa tab to pka.js
  */
 
-import { initKetcher }                          from './ketcher.js';
+import { initKetcher, loadSmiles }               from './ketcher.js';
 import { calculateProperties, renderMolecules } from './properties.js';
 import { updatePkaSmiles, calculatePka }         from './pka.js';
 import { initMolstar, loadByPdbId, loadFromFile, applyBoltzPreset } from './molstar.js';
-import { initPeptideBar }                        from './peptide.js';
+import { convertPeptideToSmiles, supportedCodes } from './peptide.js';
+import { fetchPdbLigands }                       from './pdb.js';
 
 // ----------------------------------------------------------------
 // App state
@@ -116,6 +117,9 @@ function _onSmilesChange(smiles) {
         updatePkaSmiles(currentMolecules);
     }
 
+    // Update export tab info strip
+    _updateExportInfo(currentMolecules);
+
     // Update molecule count in status bar
     const n = currentMolecules.length;
     document.getElementById('molecule-count').textContent =
@@ -130,7 +134,6 @@ function _checkReady() {
     if (isRDKitReady && isKetcherReady) {
         document.getElementById('loading').classList.add('hidden');
         _updateStatus('Ready', true);
-        initPeptideBar(RDKit);
     }
 }
 
@@ -172,6 +175,8 @@ const MODES = {
 };
 
 let currentMode       = 'draw';
+let panelMode         = 'inspect'; // 'inspect' | 'build'
+let buildView         = 'peptide'; // 'peptide' | 'pdb'
 let molstarInitted    = false;
 let boltzSpaceInitted = false;
 
@@ -199,13 +204,25 @@ async function switchMode(mode) {
 
     // Swap panel content
     const isDraw = mode === 'draw';
-    document.getElementById('view-toggle').classList.toggle('hidden',    !isDraw);
+
+    // Header: show Inspect/Build toggle in draw mode; show Viewer title in star mode
+    document.getElementById('panel-mode-toggle').classList.toggle('hidden', !isDraw);
+    document.getElementById('panel-header-star').classList.toggle('hidden',  isDraw);
+
+    // Inspect sub-tabs only visible in draw+inspect mode
+    document.getElementById('inspect-tabs').classList.toggle('hidden', !isDraw);
+
     document.getElementById('molecules-list').classList.toggle('hidden', !isDraw);
     document.getElementById('pka-container').classList.toggle('hidden',   true);   // always reset pKa
+    document.getElementById('peptide-container').classList.remove('active');       // reset build tabs
+    document.getElementById('pdb-container').classList.remove('active');
+    document.getElementById('export-container').classList.remove('active');        // reset export tab
+    document.getElementById('build-tabs').classList.add('hidden');                 // reset build sub-tabs
     document.getElementById('star-panel').classList.toggle('hidden',     isDraw);
 
-    // Reset Cards tab as active when returning to BoltzDraw
+    // Reset to Inspect / Cards when returning to BoltzDraw
     if (isDraw) {
+        _setPanelMode('inspect');
         _setDrawView('cards');
     }
 
@@ -244,18 +261,65 @@ document.getElementById('btn-space').addEventListener('click', () => switchMode(
 // View toggle (Cards / pKa) - BoltzDraw only
 // ----------------------------------------------------------------
 
-function _setDrawView(view) {
-    const isCards = view === 'cards';
-    document.getElementById('view-cards').classList.toggle('active', isCards);
-    document.getElementById('view-pka').classList.toggle('active', !isCards);
-    document.getElementById('molecules-list').classList.toggle('hidden', !isCards);
-    document.getElementById('pka-container').classList.toggle('active', !isCards);
-    if (isCards) renderMolecules(currentMolecules);
-    else         updatePkaSmiles(currentMolecules);
+// ----------------------------------------------------------------
+// Panel mode: Inspect (Cards/pKa/Export) ↔ Build (Peptide)
+// ----------------------------------------------------------------
+
+function _setPanelMode(mode) {
+    panelMode = mode;
+    const isInspect = mode === 'inspect';
+
+    document.getElementById('mode-inspect').classList.toggle('active', isInspect);
+    document.getElementById('mode-build').classList.toggle('active',  !isInspect);
+
+    // Show/hide sub-tab strips
+    document.getElementById('inspect-tabs').classList.toggle('hidden', !isInspect);
+    document.getElementById('build-tabs').classList.toggle('hidden',    isInspect);
+
+    if (isInspect) {
+        // Hide all build content, then restore the last inspect tab
+        document.getElementById('peptide-container').classList.remove('active');
+        document.getElementById('pdb-container').classList.remove('active');
+        const safeView = ['cards', 'pka', 'export'].includes(currentView) ? currentView : 'cards';
+        _setDrawView(safeView);
+    } else {
+        // Hide all inspect content, then show the current build sub-tab
+        document.getElementById('molecules-list').classList.add('hidden');
+        document.getElementById('pka-container').classList.remove('active');
+        document.getElementById('export-container').classList.remove('active');
+        _setBuildView(buildView);
+    }
 }
 
-document.getElementById('view-cards').addEventListener('click', () => _setDrawView('cards'));
-document.getElementById('view-pka').addEventListener('click',   () => _setDrawView('pka'));
+document.getElementById('mode-inspect').addEventListener('click', () => _setPanelMode('inspect'));
+document.getElementById('mode-build').addEventListener('click',   () => _setPanelMode('build'));
+
+// ----------------------------------------------------------------
+// Inspect sub-tabs: Cards / pKa / Export
+// ----------------------------------------------------------------
+
+function _setDrawView(view) {
+    const isCards  = view === 'cards';
+    const isPka    = view === 'pka';
+    const isExport = view === 'export';
+
+    document.getElementById('view-cards').classList.toggle('active',  isCards);
+    document.getElementById('view-pka').classList.toggle('active',    isPka);
+    document.getElementById('view-export').classList.toggle('active', isExport);
+
+    document.getElementById('molecules-list').classList.toggle('hidden', !isCards);
+    document.getElementById('pka-container').classList.toggle('active',  isPka);
+    document.getElementById('export-container').classList.toggle('active', isExport);
+
+    if (isCards) renderMolecules(currentMolecules);
+    else if (isPka) updatePkaSmiles(currentMolecules);
+
+    currentView = view;
+}
+
+document.getElementById('view-cards').addEventListener('click',  () => _setDrawView('cards'));
+document.getElementById('view-pka').addEventListener('click',    () => _setDrawView('pka'));
+document.getElementById('view-export').addEventListener('click', () => _setDrawView('export'));
 
 // ----------------------------------------------------------------
 // pKa button
@@ -264,6 +328,396 @@ document.getElementById('view-pka').addEventListener('click',   () => _setDrawVi
 document.getElementById('calculate-pka-btn').addEventListener('click', () => {
     calculatePka(currentMolecules);
 });
+
+// ----------------------------------------------------------------
+// Peptide tab
+// ----------------------------------------------------------------
+
+const VALID_CODES = supportedCodes();
+
+const AA_CLASS_MAP = {
+    A:'hphob', V:'hphob', I:'hphob', L:'hphob', M:'hphob', F:'hphob', W:'hphob', P:'hphob',
+    a:'hphob', v:'hphob', i:'hphob', l:'hphob', m:'hphob', f:'hphob', w:'hphob', p:'hphob',
+    G:'polar', S:'polar', T:'polar', C:'polar', Y:'polar', N:'polar', Q:'polar',
+    g:'polar', s:'polar', t:'polar', c:'polar', y:'polar', n:'polar', q:'polar',
+    R:'pos', H:'pos', K:'pos', r:'pos', h:'pos', k:'pos',
+    D:'neg', E:'neg', d:'neg', e:'neg',
+};
+
+const pepSeqEl       = document.getElementById('peptide-sequence');
+const pepPillsEl     = document.getElementById('peptide-pills');
+const pepCountEl     = document.getElementById('peptide-count');
+const pepConvertBtn  = document.getElementById('peptide-convert-btn');
+const pepErrorEl     = document.getElementById('peptide-error');
+const pepResultEl    = document.getElementById('peptide-result');
+const pepSmilesOutEl = document.getElementById('peptide-smiles-output');
+const pepCopyBtn     = document.getElementById('peptide-copy-btn');
+const pepLoadBtn     = document.getElementById('peptide-load-btn');
+const pepWarnEl      = document.getElementById('peptide-warning');
+
+function _updatePeptidePills() {
+    const seq      = pepSeqEl.value.replace(/\s/g, '');
+    const residues = seq.split('').filter(Boolean);
+    const validCount = residues.filter(r => VALID_CODES.has(r)).length;
+
+    pepPillsEl.innerHTML = residues.map(r => {
+        const cls = AA_CLASS_MAP[r];
+        return `<span class="peptide-pill peptide-pill-${cls || 'bad'}" title="${r}">${r}</span>`;
+    }).join('');
+
+    pepCountEl.textContent = `${validCount} / ${residues.length} residues valid`;
+    pepConvertBtn.disabled = residues.length === 0 || validCount !== residues.length;
+
+    // Clear previous result on edit
+    pepResultEl.classList.remove('active');
+    pepErrorEl.classList.remove('active');
+}
+
+pepSeqEl.addEventListener('input', _updatePeptidePills);
+
+pepConvertBtn.addEventListener('click', () => {
+    const seq   = pepSeqEl.value.replace(/\s/g, '');
+    const nterm = document.getElementById('peptide-nterm').value;
+    const cterm = document.getElementById('peptide-cterm').value;
+
+    pepErrorEl.classList.remove('active');
+    pepResultEl.classList.remove('active');
+
+    try {
+        const { smiles, warnings } = convertPeptideToSmiles(seq, nterm, cterm);
+
+        pepSmilesOutEl.textContent = smiles;
+        pepResultEl.classList.add('active');
+
+        if (warnings.length) {
+            pepWarnEl.textContent = warnings.join(' ');
+            pepWarnEl.classList.add('active');
+        } else {
+            pepWarnEl.classList.remove('active');
+        }
+    } catch (err) {
+        pepErrorEl.textContent = err.message;
+        pepErrorEl.classList.add('active');
+    }
+});
+
+pepCopyBtn.addEventListener('click', () => {
+    const smiles = pepSmilesOutEl.textContent;
+    navigator.clipboard.writeText(smiles).then(() => {
+        pepCopyBtn.textContent = 'Copied!';
+        setTimeout(() => { pepCopyBtn.textContent = 'Copy SMILES'; }, 1800);
+    });
+});
+
+pepLoadBtn.addEventListener('click', async () => {
+    const smiles = pepSmilesOutEl.textContent;
+    if (!smiles) return;
+    pepLoadBtn.textContent = 'Loading…';
+    pepLoadBtn.disabled = true;
+    try {
+        await loadSmiles(smiles);
+        pepLoadBtn.textContent = '✓ Loaded';
+        // Switch to Inspect → Cards so the user sees the structure
+        _setPanelMode('inspect');
+        _setDrawView('cards');
+        setTimeout(() => {
+            pepLoadBtn.textContent = 'Load in Editor →';
+            pepLoadBtn.disabled = false;
+        }, 2000);
+    } catch (err) {
+        pepLoadBtn.textContent = 'Failed';
+        pepLoadBtn.disabled = false;
+        console.error('loadSmiles failed:', err);
+    }
+});
+
+// ----------------------------------------------------------------
+// Build sub-tab switching: Peptide ↔ PDB
+// ----------------------------------------------------------------
+
+function _setBuildView(view) {
+    buildView = view;
+    const isPeptide = view === 'peptide';
+    document.getElementById('build-tab-peptide').classList.toggle('active',  isPeptide);
+    document.getElementById('build-tab-pdb').classList.toggle('active',     !isPeptide);
+    document.getElementById('peptide-container').classList.toggle('active',  isPeptide);
+    document.getElementById('pdb-container').classList.toggle('active',     !isPeptide);
+}
+
+document.getElementById('build-tab-peptide').addEventListener('click', () => _setBuildView('peptide'));
+document.getElementById('build-tab-pdb').addEventListener('click',     () => _setBuildView('pdb'));
+
+// ----------------------------------------------------------------
+// PDB ligand importer
+// ----------------------------------------------------------------
+
+const pdbCodeInput = document.getElementById('pdb-code-input');
+const pdbFetchBtn  = document.getElementById('pdb-fetch-btn');
+const pdbStatusEl  = document.getElementById('pdb-status');
+const pdbResultsEl = document.getElementById('pdb-results');
+
+pdbFetchBtn.addEventListener('click', _doPdbFetch);
+pdbCodeInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') _doPdbFetch();
+});
+
+async function _doPdbFetch() {
+    const code = pdbCodeInput.value.trim().toUpperCase();
+    if (code.length < 3 || code.length > 4) return;
+
+    pdbFetchBtn.disabled   = true;
+    pdbResultsEl.innerHTML = '';
+    pdbStatusEl.className  = 'pdb-status loading';
+    pdbStatusEl.textContent = `Fetching ${code}…`;
+    pdbStatusEl.classList.remove('hidden');
+
+    try {
+        const ligands = await fetchPdbLigands(code);
+
+        if (!ligands.length) {
+            pdbStatusEl.className   = 'pdb-status info';
+            pdbStatusEl.textContent = `No small-molecule ligands found in ${code}.`;
+            pdbFetchBtn.disabled = false;
+            return;
+        }
+
+        pdbStatusEl.className   = 'pdb-status success';
+        pdbStatusEl.textContent =
+            `${ligands.length} ligand${ligands.length !== 1 ? 's' : ''} found in ${code}`;
+
+        pdbResultsEl.innerHTML = ligands.map(lig => `
+            <div class="ligand-card">
+                <img class="ligand-card-image"
+                     src="${lig.imageUrl}"
+                     alt="${lig.comp_id} structure"
+                     loading="lazy"
+                     onerror="this.style.display='none'">
+                <div class="ligand-card-body">
+                    <div class="ligand-comp-id">${lig.comp_id}</div>
+                    <div class="ligand-name">${lig.name}</div>
+                    <div class="ligand-meta">
+                        ${lig.formula ? `<span>${lig.formula}</span>` : ''}
+                        ${lig.mw      ? `<span>${parseFloat(lig.mw).toFixed(1)} Da</span>` : ''}
+                    </div>
+                </div>
+                <button class="ligand-import-btn"
+                        data-smiles="${lig.smiles.replace(/"/g, '&quot;')}">
+                    Import into Editor →
+                </button>
+            </div>
+        `).join('');
+
+        // Wire import buttons
+        pdbResultsEl.querySelectorAll('.ligand-import-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const smiles = btn.dataset.smiles;
+                if (!smiles) return;
+                btn.textContent = 'Loading…';
+                btn.disabled    = true;
+                try {
+                    await loadSmiles(smiles);
+                    btn.textContent = '✓ Loaded';
+                    _setPanelMode('inspect');
+                    _setDrawView('cards');
+                    setTimeout(() => {
+                        btn.textContent = 'Import into Editor →';
+                        btn.disabled    = false;
+                    }, 2000);
+                } catch (err) {
+                    console.error('PDB import failed:', err);
+                    btn.textContent = 'Failed';
+                    btn.disabled    = false;
+                }
+            });
+        });
+
+    } catch (err) {
+        pdbStatusEl.className   = 'pdb-status error';
+        pdbStatusEl.textContent = err.message || 'Failed to fetch PDB entry.';
+    }
+
+    pdbFetchBtn.disabled = false;
+}
+
+// ----------------------------------------------------------------
+// Export tab
+// ----------------------------------------------------------------
+
+let selectedExportFormat = null;
+
+function _updateExportInfo(molecules) {
+    const infoEl = document.getElementById('export-molecule-info');
+    if (!infoEl) return;
+    if (!molecules.length) {
+        infoEl.querySelector('.export-mol-name').textContent = '—';
+        infoEl.querySelector('.export-mol-meta').textContent = 'Draw a molecule first';
+        return;
+    }
+    const n   = molecules.length;
+    const mol = molecules[0];
+    infoEl.querySelector('.export-mol-name').textContent =
+        n === 1 ? 'Mol 1' : `${n} molecules`;
+    infoEl.querySelector('.export-mol-meta').textContent =
+        `${mol.smiles.slice(0, 48)}${mol.smiles.length > 48 ? '…' : ''} · MW ${mol.mw?.toFixed(2) ?? '—'}`;
+}
+
+function _exportBtnLabel(format) {
+    if (!format) return 'Select a format above';
+    return format === 'smiles' ? 'List SMILES' : `Download ${format.toUpperCase()}`;
+}
+
+document.querySelectorAll('.export-format').forEach(card => {
+    card.addEventListener('click', () => {
+        document.querySelectorAll('.export-format').forEach(c => c.classList.remove('selected'));
+        card.classList.add('selected');
+        selectedExportFormat = card.dataset.format;
+
+        // Collapse any open SMILES list when switching format
+        document.getElementById('smiles-list-output').classList.add('hidden');
+
+        const btn = document.getElementById('export-download-btn');
+        btn.disabled = !currentMolecules.length;
+        btn.textContent = currentMolecules.length
+            ? _exportBtnLabel(selectedExportFormat)
+            : 'Draw a molecule first';
+    });
+});
+
+document.getElementById('export-download-btn').addEventListener('click', async () => {
+    if (!selectedExportFormat || !currentMolecules.length) return;
+
+    const btn     = document.getElementById('export-download-btn');
+    const ketcher = document.getElementById('ketcher-frame').contentWindow?.ketcher;
+
+    btn.disabled = true;
+
+    try {
+        switch (selectedExportFormat) {
+
+            // ---- SMILES: inline list, no download ----
+            case 'smiles': {
+                btn.textContent = 'Listing…';
+                const smiList = currentMolecules.map(m => m.smiles).join('\n');
+                const ta = document.getElementById('smiles-list-textarea');
+                ta.value = smiList;
+                document.getElementById('smiles-list-output').classList.remove('hidden');
+                btn.textContent = '✓ Listed';
+                setTimeout(() => { btn.textContent = 'List SMILES'; btn.disabled = false; }, 2000);
+                return; // no download, exit early
+            }
+
+            // ---- CSV: SMILES, ID, IUPAC ----
+            case 'csv': {
+                btn.textContent = 'Fetching IUPAC names…';
+                const smilesList = currentMolecules.map(m => m.smiles);
+                const iupacNames = await _fetchIupacNames(smilesList);
+                const csvEsc     = s => `"${String(s).replace(/"/g, '""')}"`;
+                const rows       = ['SMILES,ID,IUPAC'];
+                smilesList.forEach((smi, i) =>
+                    rows.push([csvEsc(smi), csvEsc(`Mol ${i + 1}`), csvEsc(iupacNames[i] || '')].join(','))
+                );
+                _downloadText(rows.join('\n'), 'molecules.csv', 'text/csv');
+                break;
+            }
+
+            // ---- SDF: mol block + SMILES / ID / IUPAC data fields ----
+            case 'sdf': {
+                btn.textContent = 'Fetching IUPAC names…';
+                const smilesList = currentMolecules.map(m => m.smiles);
+                const iupacNames = await _fetchIupacNames(smilesList);
+                const blocks     = smilesList.map((smi, i) => {
+                    const mol      = RDKit.get_mol(smi);
+                    const molblock = mol.get_molblock(); // ends with "M  END\n"
+                    mol.delete();
+                    return (
+                        molblock +
+                        `> <SMILES>\n${smi}\n\n` +
+                        `> <ID>\nMol ${i + 1}\n\n` +
+                        `> <IUPAC>\n${iupacNames[i] || ''}\n\n` +
+                        `$$$$`
+                    );
+                });
+                _downloadText(blocks.join('\n'), 'molecules.sdf', 'chemical/x-mdl-sdfile');
+                break;
+            }
+
+            case 'png': {
+                btn.textContent = 'Preparing…';
+                const fullSmiles = currentMolecules.map(m => m.smiles).join('.');
+                const blob = await ketcher.generateImage(fullSmiles, { outputFormat: 'png' });
+                _downloadBlob(blob, 'structure.png');
+                break;
+            }
+
+            case 'svg': {
+                btn.textContent = 'Preparing…';
+                const fullSmiles = currentMolecules.map(m => m.smiles).join('.');
+                const blob = await ketcher.generateImage(fullSmiles, { outputFormat: 'svg' });
+                _downloadBlob(blob, 'structure.svg');
+                break;
+            }
+
+            default:
+                throw new Error(`Unknown format: ${selectedExportFormat}`);
+        }
+
+        btn.textContent = '✓ Downloaded';
+        setTimeout(() => {
+            btn.textContent = _exportBtnLabel(selectedExportFormat);
+            btn.disabled = false;
+        }, 2000);
+
+    } catch (err) {
+        console.error('Export failed:', err);
+        btn.textContent = 'Export failed — check console';
+        btn.disabled = false;
+    }
+});
+
+// Copy All button for the inline SMILES list
+document.getElementById('smiles-copy-all-btn').addEventListener('click', () => {
+    const text = document.getElementById('smiles-list-textarea').value;
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+        const btn = document.getElementById('smiles-copy-all-btn');
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = 'Copy All'; }, 1800);
+    });
+});
+
+/**
+ * Fetch IUPAC names from PubChem for each SMILES.
+ * Returns empty string for any that fail (network error, unknown structure).
+ */
+async function _fetchIupacNames(smilesList) {
+    return Promise.all(smilesList.map(async (smiles) => {
+        try {
+            const url = `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/` +
+                        `${encodeURIComponent(smiles)}/property/IUPACName/JSON`;
+            const res  = await fetch(url);
+            if (!res.ok) return '';
+            const data = await res.json();
+            return data?.PropertyTable?.Properties?.[0]?.IUPACName ?? '';
+        } catch {
+            return '';
+        }
+    }));
+}
+
+function _downloadText(text, filename, mime) {
+    _downloadBlob(new Blob([text], { type: mime }), filename);
+}
+
+function _downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a   = document.createElement('a');
+    a.href     = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
 
 // ----------------------------------------------------------------
 // Panel collapse toggle
