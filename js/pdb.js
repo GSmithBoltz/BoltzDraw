@@ -4,17 +4,20 @@
  * Fetches small-molecule ligands from an RCSB PDB entry.
  * Uses the public, CORS-enabled RCSB Data API.
  *
- * Chain:
- *   1. GET /entry/{id}              → non_polymer_entity_ids
- *   2. GET /nonpolymer_entity/{id}/{eid}  → comp_id per entity
- *   3. GET /chemcomp/{comp_id}      → SMILES, formula, MW
+ * Chain (fetchPdbLigands):
+ *   1. GET /entry/{id}                   → non_polymer_entity_ids
+ *   2. GET /nonpolymer_entity/{id}/{eid} → comp_id per entity
+ *   3. fetchLigandsByCompIds()           → SMILES, formula, MW, image
+ *
+ * fetchLigandsByCompIds() is also exported so the file-upload tab
+ * can reuse it after parsing comp_ids directly from a PDB/CIF file.
  */
 
 const RCSB_BASE = 'https://data.rcsb.org/rest/v1/core';
 const IMAGE_CDN = 'https://cdn.rcsb.org/images/ccd/unlabeled';
 
 // Exclude water, common ions, buffers, and cryoprotectants
-const EXCLUDE = new Set([
+export const LIGAND_EXCLUDE = new Set([
     'HOH', 'WAT', 'DOD',                                // water / deuterium
     'SO4', 'PO4', 'GOL', 'EDO', 'EOH', 'PEG',          // cryoprotectants
     'MES', 'EPE', 'HED', 'TRS', 'BME',                  // buffers
@@ -38,25 +41,42 @@ export async function fetchPdbLigands(pdbId) {
     const entityIds = entry?.rcsb_entry_container_identifiers?.non_polymer_entity_ids ?? [];
     if (!entityIds.length) return [];
 
-    // 2. Fetch each entity in parallel
+    // 2. Fetch each entity in parallel → comp_ids
     const entities = await Promise.all(
         entityIds.map(eid =>
             _get(`${RCSB_BASE}/nonpolymer_entity/${id}/${eid}`).catch(() => null)
         )
     );
 
-    // Deduplicate comp_ids, filter exclusions
+    const rawIds = entities
+        .map(e => e?.pdbx_entity_nonpoly?.comp_id)
+        .filter(Boolean);
+
+    // 3. Resolve to full ligand objects
+    return fetchLigandsByCompIds(rawIds);
+}
+
+/**
+ * Given an array of CCD comp_ids (3-letter codes), deduplicate, filter
+ * exclusions, fetch chemcomp data, and return ligand objects.
+ * Exported so the file-upload tab can call it directly.
+ *
+ * @param {string[]} rawCompIds
+ * @returns {Promise<Array<{comp_id, name, formula, mw, smiles, imageUrl}>>}
+ */
+export async function fetchLigandsByCompIds(rawCompIds) {
+    // Deduplicate and filter
     const seen    = new Set();
     const compIds = [];
-    for (const entity of entities) {
-        const comp_id = entity?.pdbx_entity_nonpoly?.comp_id;
-        if (!comp_id || EXCLUDE.has(comp_id) || seen.has(comp_id)) continue;
-        seen.add(comp_id);
-        compIds.push(comp_id);
+    for (const cid of rawCompIds) {
+        const c = cid?.toUpperCase?.();
+        if (!c || LIGAND_EXCLUDE.has(c) || seen.has(c)) continue;
+        seen.add(c);
+        compIds.push(c);
     }
     if (!compIds.length) return [];
 
-    // 3. Chemical component data — SMILES, formula, MW
+    // Fetch chemical component data in parallel
     const chemComps = await Promise.all(
         compIds.map(cid => _get(`${RCSB_BASE}/chemcomp/${cid}`).catch(() => null))
     );
@@ -79,7 +99,7 @@ export async function fetchPdbLigands(pdbId) {
             const imageUrl = `${IMAGE_CDN}/${comp_id[0].toLowerCase()}/${comp_id}.svg`;
             return { comp_id, name, formula, mw, smiles, imageUrl };
         })
-        .filter(lig => lig.smiles); // only include if we have a SMILES
+        .filter(lig => lig.smiles);
 }
 
 async function _get(url) {

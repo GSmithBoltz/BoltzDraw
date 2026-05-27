@@ -197,10 +197,11 @@
                 <button id="view-export">Export</button>
             </div>
 
-            <!-- Build sub-tabs: Peptide / PDB (shown in Build mode only) -->
+            <!-- Build sub-tabs: Peptide / PDB / File (shown in Build mode only) -->
             <div id="build-tabs" class="hidden">
                 <button id="build-tab-peptide" class="active">Peptide</button>
                 <button id="build-tab-pdb">PDB</button>
+                <button id="build-tab-file">File</button>
             </div>
 
             <!-- BoltzDraw: molecule property cards -->
@@ -317,6 +318,32 @@
 
                 <div class="pdb-status hidden" id="pdb-status"></div>
                 <div class="pdb-results" id="pdb-results"></div>
+
+            </div>
+
+            <!-- BoltzDraw: File upload ligand extractor tab -->
+            <div class="pdb-container" id="file-container">
+
+                <div class="pdb-input-section">
+                    <label class="pdb-label">Upload Structure File</label>
+                    <label class="file-upload-zone" for="lig-file-input" id="file-upload-zone">
+                        <svg class="file-upload-icon" width="28" height="28" viewBox="0 0 24 24"
+                             fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                            <polyline points="17 8 12 3 7 8"/>
+                            <line x1="12" y1="3" x2="12" y2="15"/>
+                        </svg>
+                        <span class="file-upload-text" id="file-upload-text">
+                            Drop .pdb or .cif file here
+                        </span>
+                        <span class="file-upload-sub">or click to browse</span>
+                    </label>
+                    <input type="file" id="lig-file-input"
+                           accept=".pdb,.cif,.mmcif" style="display:none">
+                </div>
+
+                <div class="pdb-status hidden" id="file-status"></div>
+                <div class="pdb-results" id="file-results"></div>
 
             </div>
 

@@ -14,7 +14,8 @@ import { calculateProperties, renderMolecules } from './properties.js';
 import { updatePkaSmiles, calculatePka }         from './pka.js';
 import { initMolstar, loadByPdbId, loadFromFile, applyBoltzPreset } from './molstar.js';
 import { convertPeptideToSmiles, supportedCodes } from './peptide.js';
-import { fetchPdbLigands }                       from './pdb.js';
+import { fetchPdbLigands, fetchLigandsByCompIds } from './pdb.js';
+import { parsePdb, parseCif, buildMolFromPdbCoords, GENERIC_LIGAND_CODES } from './fileparse.js';
 
 // ----------------------------------------------------------------
 // App state
@@ -216,6 +217,7 @@ async function switchMode(mode) {
     document.getElementById('pka-container').classList.toggle('hidden',   true);   // always reset pKa
     document.getElementById('peptide-container').classList.remove('active');       // reset build tabs
     document.getElementById('pdb-container').classList.remove('active');
+    document.getElementById('file-container').classList.remove('active');
     document.getElementById('export-container').classList.remove('active');        // reset export tab
     document.getElementById('build-tabs').classList.add('hidden');                 // reset build sub-tabs
     document.getElementById('star-panel').classList.toggle('hidden',     isDraw);
@@ -280,6 +282,7 @@ function _setPanelMode(mode) {
         // Hide all build content, then restore the last inspect tab
         document.getElementById('peptide-container').classList.remove('active');
         document.getElementById('pdb-container').classList.remove('active');
+        document.getElementById('file-container').classList.remove('active');
         const safeView = ['cards', 'pka', 'export'].includes(currentView) ? currentView : 'cards';
         _setDrawView(safeView);
     } else {
@@ -437,15 +440,18 @@ pepLoadBtn.addEventListener('click', async () => {
 
 function _setBuildView(view) {
     buildView = view;
-    const isPeptide = view === 'peptide';
-    document.getElementById('build-tab-peptide').classList.toggle('active',  isPeptide);
-    document.getElementById('build-tab-pdb').classList.toggle('active',     !isPeptide);
-    document.getElementById('peptide-container').classList.toggle('active',  isPeptide);
-    document.getElementById('pdb-container').classList.toggle('active',     !isPeptide);
+    ['peptide', 'pdb', 'file'].forEach(v => {
+        document.getElementById(`build-tab-${v}`).classList.toggle('active', v === view);
+        const containerId = v === 'peptide' ? 'peptide-container'
+                          : v === 'pdb'     ? 'pdb-container'
+                          :                   'file-container';
+        document.getElementById(containerId).classList.toggle('active', v === view);
+    });
 }
 
 document.getElementById('build-tab-peptide').addEventListener('click', () => _setBuildView('peptide'));
 document.getElementById('build-tab-pdb').addEventListener('click',     () => _setBuildView('pdb'));
+document.getElementById('build-tab-file').addEventListener('click',    () => _setBuildView('file'));
 
 // ----------------------------------------------------------------
 // PDB ligand importer
@@ -485,51 +491,7 @@ async function _doPdbFetch() {
         pdbStatusEl.textContent =
             `${ligands.length} ligand${ligands.length !== 1 ? 's' : ''} found in ${code}`;
 
-        pdbResultsEl.innerHTML = ligands.map(lig => `
-            <div class="ligand-card">
-                <img class="ligand-card-image"
-                     src="${lig.imageUrl}"
-                     alt="${lig.comp_id} structure"
-                     loading="lazy"
-                     onerror="this.style.display='none'">
-                <div class="ligand-card-body">
-                    <div class="ligand-comp-id">${lig.comp_id}</div>
-                    <div class="ligand-name">${lig.name}</div>
-                    <div class="ligand-meta">
-                        ${lig.formula ? `<span>${lig.formula}</span>` : ''}
-                        ${lig.mw      ? `<span>${parseFloat(lig.mw).toFixed(1)} Da</span>` : ''}
-                    </div>
-                </div>
-                <button class="ligand-import-btn"
-                        data-smiles="${lig.smiles.replace(/"/g, '&quot;')}">
-                    Import into Editor →
-                </button>
-            </div>
-        `).join('');
-
-        // Wire import buttons
-        pdbResultsEl.querySelectorAll('.ligand-import-btn').forEach(btn => {
-            btn.addEventListener('click', async () => {
-                const smiles = btn.dataset.smiles;
-                if (!smiles) return;
-                btn.textContent = 'Loading…';
-                btn.disabled    = true;
-                try {
-                    await loadSmiles(smiles);
-                    btn.textContent = '✓ Loaded';
-                    _setPanelMode('inspect');
-                    _setDrawView('cards');
-                    setTimeout(() => {
-                        btn.textContent = 'Import into Editor →';
-                        btn.disabled    = false;
-                    }, 2000);
-                } catch (err) {
-                    console.error('PDB import failed:', err);
-                    btn.textContent = 'Failed';
-                    btn.disabled    = false;
-                }
-            });
-        });
+        _renderLigandCards(ligands, pdbResultsEl);
 
     } catch (err) {
         pdbStatusEl.className   = 'pdb-status error';
@@ -537,6 +499,215 @@ async function _doPdbFetch() {
     }
 
     pdbFetchBtn.disabled = false;
+}
+
+// ----------------------------------------------------------------
+// Shared ligand card renderer (used by PDB and File tabs)
+// ----------------------------------------------------------------
+
+function _renderLigandCards(ligands, resultsEl) {
+    resultsEl.innerHTML = ligands.map(lig => `
+        <div class="ligand-card">
+            <img class="ligand-card-image"
+                 src="${lig.imageUrl}"
+                 alt="${lig.comp_id} structure"
+                 loading="lazy"
+                 onerror="this.style.display='none'">
+            <div class="ligand-card-body">
+                <div class="ligand-comp-id">${lig.comp_id}</div>
+                <div class="ligand-name">${lig.name}</div>
+                <div class="ligand-meta">
+                    ${lig.formula ? `<span>${lig.formula}</span>` : ''}
+                    ${lig.mw      ? `<span>${parseFloat(lig.mw).toFixed(1)} Da</span>` : ''}
+                </div>
+            </div>
+            <button class="ligand-import-btn"
+                    data-smiles="${lig.smiles.replace(/"/g, '&quot;')}">
+                Import into Editor →
+            </button>
+        </div>
+    `).join('');
+
+    resultsEl.querySelectorAll('.ligand-import-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const smiles = btn.dataset.smiles;
+            if (!smiles) return;
+            btn.textContent = 'Loading…';
+            btn.disabled    = true;
+            try {
+                await loadSmiles(smiles);
+                btn.textContent = '✓ Loaded';
+                _setPanelMode('inspect');
+                _setDrawView('cards');
+                setTimeout(() => {
+                    btn.textContent = 'Import into Editor →';
+                    btn.disabled    = false;
+                }, 2000);
+            } catch (err) {
+                console.error('Ligand import failed:', err);
+                btn.textContent = 'Failed';
+                btn.disabled    = false;
+            }
+        });
+    });
+}
+
+// ----------------------------------------------------------------
+// File upload ligand extractor
+// ----------------------------------------------------------------
+
+const ligFileInput  = document.getElementById('lig-file-input');
+const fileUploadZone = document.getElementById('file-upload-zone');
+const fileUploadText = document.getElementById('file-upload-text');
+const fileStatusEl  = document.getElementById('file-status');
+const fileResultsEl = document.getElementById('file-results');
+
+// Click on zone → trigger file input
+fileUploadZone.addEventListener('click', () => ligFileInput.click());
+
+// Drag-and-drop styling
+fileUploadZone.addEventListener('dragover',  (e) => { e.preventDefault(); fileUploadZone.classList.add('drag-over'); });
+fileUploadZone.addEventListener('dragleave', ()  => fileUploadZone.classList.remove('drag-over'));
+fileUploadZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    fileUploadZone.classList.remove('drag-over');
+    const file = e.dataTransfer?.files?.[0];
+    if (file) _processStructureFile(file);
+});
+
+ligFileInput.addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    if (file) _processStructureFile(file);
+    // Reset so re-uploading the same file still fires
+    ligFileInput.value = '';
+});
+
+async function _processStructureFile(file) {
+    const name  = file.name.toLowerCase();
+    const isPdb = name.endsWith('.pdb');
+    const isCif = name.endsWith('.cif') || name.endsWith('.mmcif');
+
+    if (!isPdb && !isCif) {
+        fileStatusEl.className   = 'pdb-status error';
+        fileStatusEl.textContent = 'Unsupported file type. Please upload a .pdb or .cif file.';
+        fileStatusEl.classList.remove('hidden');
+        return;
+    }
+
+    fileUploadZone.classList.add('has-file');
+    fileUploadText.textContent = file.name;
+
+    fileStatusEl.className   = 'pdb-status loading';
+    fileStatusEl.textContent = 'Parsing file…';
+    fileStatusEl.classList.remove('hidden');
+    fileResultsEl.innerHTML  = '';
+
+    try {
+        const text                = await file.text();
+        const { compIds, smilesMap } = isPdb ? parsePdb(text) : parseCif(text);
+
+        if (!compIds.length) {
+            fileStatusEl.className   = 'pdb-status info';
+            fileStatusEl.textContent = 'No small-molecule ligands found in this file.';
+            return;
+        }
+
+        // Split: comp_ids whose SMILES we already have vs those that need the CCD API
+        const inlineIds = compIds.filter(id =>  smilesMap[id]);
+        const apiIds    = compIds.filter(id => !smilesMap[id]);
+
+        fileStatusEl.textContent =
+            apiIds.length
+                ? `Found ${compIds.length} ligand${compIds.length !== 1 ? 's' : ''} — fetching data…`
+                : `Found ${compIds.length} ligand${compIds.length !== 1 ? 's' : ''} — generating previews…`;
+
+        // --- Build ligand objects from inline SMILES using RDKit for 2D SVG ---
+        const inlineLigands = inlineIds.map(comp_id => {
+            const smiles = smilesMap[comp_id];
+            let svgDataUri = '';
+            try {
+                const mol = RDKit.get_mol(smiles);
+                if (mol) {
+                    const svgStr = mol.get_svg(220, 160);
+                    svgDataUri = `data:image/svg+xml,${encodeURIComponent(svgStr)}`;
+                    mol.delete();
+                }
+            } catch (e) { /* RDKit couldn't parse - SVG will be blank */ }
+            return {
+                comp_id,
+                name:     comp_id,          // no name from file; CDD might add it
+                formula:  '',
+                mw:       null,
+                smiles,
+                imageUrl: svgDataUri || `https://cdn.rcsb.org/images/ccd/unlabeled/${comp_id[0].toLowerCase()}/${comp_id}.svg`,
+            };
+        });
+
+        // --- Fetch remaining via RCSB CCD API ---
+        const apiLigands = apiIds.length ? await fetchLigandsByCompIds(apiIds) : [];
+
+        const allLigands = [...inlineLigands, ...apiLigands];
+
+        if (!allLigands.length) {
+            // Last resort: reconstruct bonds from 3D coordinates (e.g. generic 'LIG' codes)
+            if (isPdb && compIds.length) {
+                fileStatusEl.className   = 'pdb-status loading';
+                fileStatusEl.textContent = 'No CCD data found — inferring structure from 3D coordinates…';
+
+                const coordLigands = [];
+                for (const compId of compIds) {
+                    const molblock = buildMolFromPdbCoords(text, compId);
+                    if (!molblock) continue;
+                    try {
+                        const mol = RDKit.get_mol(molblock);
+                        if (mol) {
+                            const smiles = mol.get_smiles();
+                            const svgStr = mol.get_svg(220, 160);
+                            mol.delete();
+                            if (smiles) {
+                                const label = GENERIC_LIGAND_CODES.has(compId)
+                                    ? `${compId} (from coordinates)`
+                                    : compId;
+                                coordLigands.push({
+                                    comp_id:  compId,
+                                    name:     label,
+                                    formula:  '',
+                                    mw:       null,
+                                    smiles,
+                                    imageUrl: `data:image/svg+xml,${encodeURIComponent(svgStr)}`,
+                                });
+                            }
+                        }
+                    } catch (e) {
+                        console.warn(`RDKit reconstruction failed for ${compId}:`, e);
+                    }
+                }
+
+                if (coordLigands.length) {
+                    fileStatusEl.className   = 'pdb-status success';
+                    fileStatusEl.textContent =
+                        `${coordLigands.length} ligand${coordLigands.length !== 1 ? 's' : ''} reconstructed from 3D coordinates`;
+                    _renderLigandCards(coordLigands, fileResultsEl);
+                    return;
+                }
+            }
+
+            fileStatusEl.className   = 'pdb-status info';
+            fileStatusEl.textContent = 'Ligands found but could not retrieve SMILES.';
+            return;
+        }
+
+        fileStatusEl.className   = 'pdb-status success';
+        fileStatusEl.textContent =
+            `${allLigands.length} ligand${allLigands.length !== 1 ? 's' : ''} extracted from ${file.name}`;
+
+        _renderLigandCards(allLigands, fileResultsEl);
+
+    } catch (err) {
+        console.error('File parse failed:', err);
+        fileStatusEl.className   = 'pdb-status error';
+        fileStatusEl.textContent = err.message || 'Failed to process file.';
+    }
 }
 
 // ----------------------------------------------------------------

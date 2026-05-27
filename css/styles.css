@@ -1623,6 +1623,60 @@ body {
     cursor: not-allowed;
 }
 
+/* ================================================================
+   FILE UPLOAD ZONE (Build → File tab)
+================================================================ */
+.file-upload-zone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 28px 16px;
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-align: center;
+}
+
+.file-upload-zone:hover {
+    border-color: var(--green-dark);
+    background: var(--green-subtle);
+}
+
+.file-upload-zone.drag-over {
+    border-color: var(--green-dark);
+    background: var(--green-subtle);
+    border-style: solid;
+}
+
+.file-upload-zone.has-file {
+    border-color: var(--green-dark);
+    border-style: solid;
+    background: var(--green-subtle);
+}
+
+.file-upload-icon {
+    color: var(--text-muted);
+}
+
+.file-upload-text {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.file-upload-zone.has-file .file-upload-text {
+    color: var(--green-dark);
+    font-family: 'SF Mono', 'Fira Mono', monospace;
+}
+
+.file-upload-sub {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
 /* Scrollbar for star panel */
 .star-panel::-webkit-scrollbar { width: 5px; }
 .star-panel::-webkit-scrollbar-track { background: transparent; }
