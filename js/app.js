@@ -253,7 +253,7 @@ async function switchMode(mode) {
         boltzPlotInitted = true;
         try {
             const { initBoltzPlot } = await import('./boltzplot.js');
-            await initBoltzPlot();
+            await initBoltzPlot(RDKit);
         } catch (err) {
             console.error('BoltzPlot init failed:', err);
         }

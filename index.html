@@ -179,6 +179,9 @@
             <div id="bp-plot-area">
                 <div id="bp-empty-state"></div>
                 <div id="bp-plot" class="hidden"></div>
+                <div id="bp-card-strip" class="hidden">
+                    <div id="bp-card-strip-inner"></div>
+                </div>
             </div>
 
             <div id="bp-panel">
@@ -211,7 +214,38 @@
                     <label class="star-label">Label / Hover</label>
                     <select id="bp-label-col" class="space-select"></select>
 
+                    <label class="star-label">Structure (SMILES)</label>
+                    <select id="bp-smiles-col" class="space-select"></select>
+
+                    <div class="bp-advanced-header" id="bp-advanced-toggle">
+                        <span>Advanced options</span>
+                        <span class="bp-adv-arrow">▸</span>
+                    </div>
+                    <div class="bp-advanced-body hidden" id="bp-advanced-body">
+                        <label class="bp-checkbox-row">
+                            <input type="checkbox" id="bp-opt-marginals">
+                            <span>Marginal histograms</span>
+                        </label>
+                        <label class="bp-checkbox-row">
+                            <input type="checkbox" id="bp-opt-regression">
+                            <span>Linear regression</span>
+                        </label>
+                        <label class="bp-checkbox-row">
+                            <input type="checkbox" id="bp-opt-density">
+                            <span>Density overlay</span>
+                        </label>
+                    </div>
+
                     <button class="star-apply-btn" id="bp-generate-btn">Generate Plot</button>
+                </div>
+
+                <div class="star-section hidden" id="bp-highlight-section">
+                    <label class="star-label">Highlight</label>
+                    <textarea id="bp-highlight-input"
+                              class="space-textarea"
+                              placeholder="Paste IDs or SMILES, one per line"></textarea>
+                    <button class="star-load-btn" id="bp-apply-highlight-btn">Apply</button>
+                    <div class="star-status hidden" id="bp-highlight-status"></div>
                 </div>
 
             </div>
