@@ -1,7 +1,7 @@
 /**
  * molstar.js
  *
- * BoltzStar - Molstar 5.7.0 3D structure viewer.
+ * BoltzViewer - Molstar 5.7.0 3D structure viewer.
  *
  * Boltz Style Preset
  * ------------------
@@ -37,10 +37,14 @@ const MOLSTAR_JS_URL =
     'https://cdn.jsdelivr.net/npm/molstar@5.7.0/build/viewer/molstar.js';
 
 // Boltz colours - Molstar Color is a plain 0xRRGGBB integer
-const COLOR = {
+export const COLOR = {
     protein: 0x5078D2,   // blue
     ligand:  0xFCC400,   // yellow
 };
+
+// Surface presence on the loaded structure - true once Boltz/manual style
+// has rebuilt the default cartoon/ball-and-stick into molecular surfaces.
+let surfacesApplied = false;
 
 let viewer    = null;
 let molLoaded = false;
@@ -91,6 +95,7 @@ export async function loadByPdbId(pdbId, onStatus) {
         );
 
         molLoaded = true;
+        surfacesApplied = false;
         onStatus(`Loaded ${id}`, 'success');
         document.getElementById('apply-preset-btn').disabled = false;
     } catch (err) {
@@ -114,6 +119,7 @@ export async function loadFromFile(file, onStatus) {
         await viewer.loadStructureFromData(data, format, false);
 
         molLoaded = true;
+        surfacesApplied = false;
         onStatus(`Loaded ${file.name}`, 'success');
         document.getElementById('apply-preset-btn').disabled = false;
     } catch (err) {
@@ -123,14 +129,17 @@ export async function loadFromFile(file, onStatus) {
 }
 
 /**
- * Apply Boltz Style preset.
+ * Apply Boltz Style preset (with optional custom colors).
  *
- * Walks the auto-generated component hierarchy and updates each
- * representation in-place via the state builder. No component
- * creation or clearing - that's what caused getSelection errors.
+ * Walks the auto-generated component hierarchy and rebuilds each
+ * representation as a molecular surface. Heavy operation - rebuilds
+ * the surface mesh. For live color tweaks use setSurfaceColors().
  */
-export async function applyBoltzPreset() {
+export async function applyBoltzPreset(opts = {}) {
     if (!viewer || !molLoaded) return;
+
+    const proteinColor = opts.proteinColor ?? COLOR.protein;
+    const ligandColor  = opts.ligandColor  ?? COLOR.ligand;
 
     const plugin = viewer.plugin;
 
@@ -176,8 +185,8 @@ export async function applyBoltzPreset() {
                     key.includes('non-polymer')  ||
                     key.includes('branched');
 
-                const color = isLigand ? COLOR.ligand : COLOR.protein;
-                const alpha = isLigand ? 1.0           : 0.3;
+                const color = isLigand ? ligandColor : proteinColor;
+                const alpha = isLigand ? 1.0          : 0.3;
 
                 // Step 1: delete existing representations (cartoon/ball-and-stick)
                 // We cannot change type.name via .update() - it is silently ignored
@@ -212,10 +221,60 @@ export async function applyBoltzPreset() {
             }
         }
 
+        surfacesApplied = true;
         console.log('Boltz style preset applied');
     } catch (err) {
         console.error('Preset failed:', err);
         throw err;
+    }
+}
+
+/**
+ * Live recolor of existing molecular-surface representations.
+ *
+ * Cheap operation - only swaps the colorTheme uniform value; does NOT
+ * rebuild the surface mesh. If surfaces haven't been built yet, falls
+ * back to a full applyBoltzPreset() so the manual picker still produces
+ * a visible result on first use.
+ */
+export async function setSurfaceColors(opts = {}) {
+    if (!viewer || !molLoaded) return;
+
+    if (!surfacesApplied) {
+        return applyBoltzPreset(opts);
+    }
+
+    const proteinColor = opts.proteinColor ?? COLOR.protein;
+    const ligandColor  = opts.ligandColor  ?? COLOR.ligand;
+
+    const plugin = viewer.plugin;
+    const structures = plugin.managers.structure.hierarchy.current.structures;
+
+    for (const structRef of structures) {
+        for (const comp of structRef.components) {
+            const key = (comp.key || '').toLowerCase();
+            if (key.includes('water') || key.includes('ion') || key.includes('coarse')) continue;
+
+            const isLigand =
+                key.includes('ligand')      ||
+                key.includes('non-polymer') ||
+                key.includes('branched');
+
+            const color = isLigand ? ligandColor : proteinColor;
+
+            for (const repr of comp.representations) {
+                const reprType = repr.cell?.params?.values?.type?.name;
+                if (reprType !== 'molecular-surface') continue;
+
+                try {
+                    await plugin.build().to(repr.cell).update(old => {
+                        old.colorTheme = { name: 'uniform', params: { value: color } };
+                    }).commit();
+                } catch (e) {
+                    console.warn(`  recolor failed on "${key}":`, e.message);
+                }
+            }
+        }
     }
 }
 

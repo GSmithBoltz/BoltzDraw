@@ -29,11 +29,20 @@
     min-height: 0;
 }
 
+#space-plots-grid.single-plot {
+    grid-template-columns: 1fr;
+}
+
 #umap-plot,
 #tsne-plot {
     background: var(--bg-surface);
     width: 100%;
     height: 100%;
+}
+
+#umap-plot.hidden,
+#tsne-plot.hidden {
+    display: none;
 }
 
 /* ---- Empty state ---- */

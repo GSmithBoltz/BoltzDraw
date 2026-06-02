@@ -94,13 +94,11 @@ function _wireListeners() {
 function _updateMethodsPanel(p) {
     const pcaPart  = p.pcaDims ? ` → RP ${p.pcaDims} dims` : '';
     const skipPart = p.skipped > 0 ? `, ${p.skipped} invalid` : '';
-    const text = [
-        `ECFP4 r=2 2048-bit${pcaPart}`,
-        `UMAP: neighbors=${p.umapNeighbors} min_dist=${p.minDist}`,
-        `t-SNE: perplexity=${p.perplexity} iter=${p.nIter} lr=${p.lr}`,
-        `${p.nMols} molecules${skipPart}`,
-    ].join('  ·  ');
-    document.getElementById('space-methods-text').textContent = text;
+    const parts = [`ECFP4 r=2 2048-bit${pcaPart}`];
+    if (p.ranUmap) parts.push(`UMAP: neighbors=${p.umapNeighbors} min_dist=${p.minDist}`);
+    if (p.ranTsne) parts.push(`t-SNE: perplexity=${p.perplexity} iter=${p.nIter} lr=${p.lr}`);
+    parts.push(`${p.nMols} molecules${skipPart}`);
+    document.getElementById('space-methods-text').textContent = parts.join('  ·  ');
     document.getElementById('space-methods-bar').classList.remove('hidden');
 }
 
@@ -136,6 +134,9 @@ function _renderEmptyState() {
 export function handleCsvUpload(file) {
     _setUploadStatus('Parsing CSV…', 'loading');
 
+    // Clear any plots/selections from a previous run before the new analysis
+    _resetForNewCsv();
+
     Papa.parse(file, {
         header: true,
         skipEmptyLines: true,
@@ -151,6 +152,37 @@ export function handleCsvUpload(file) {
             _setUploadStatus('Parse error: ' + err.message, 'error');
         },
     });
+}
+
+function _resetForNewCsv() {
+    // Reset state
+    projections   = null;
+    validIndices  = [];
+    highlightIds  = new Set();
+    selectedIds   = new Set();
+
+    // Tear down existing Plotly instances so a fresh CSV gets a clean canvas
+    for (const id of ['umap-plot', 'tsne-plot']) {
+        const el = document.getElementById(id);
+        if (el && el._bsInitted) {
+            try { Plotly.purge(el); } catch {}
+            el._bsInitted = false;
+        }
+        el?.classList.remove('hidden');
+    }
+
+    // Hide plots grid, methods bar, card strip, downstream sections; show empty state
+    document.getElementById('space-plots-grid').classList.add('hidden');
+    document.getElementById('space-plots-grid').classList.remove('single-plot');
+    document.getElementById('space-methods-bar').classList.add('hidden');
+    document.getElementById('space-card-strip').classList.add('hidden');
+    document.getElementById('space-highlight-section').classList.add('hidden');
+    document.getElementById('space-score-section').classList.add('hidden');
+    document.getElementById('space-empty-state').classList.remove('hidden');
+
+    // Reset highlight input
+    const hi = document.getElementById('highlight-input');
+    if (hi) hi.value = '';
 }
 
 function _populateSelects(cols) {
@@ -216,58 +248,66 @@ export async function runProjection() {
 
     const skipNote = skipped > 0 ? ` · ${skipped} invalid skipped` : '';
 
-    // UMAP
-    _setUploadStatus(`${fps.length} molecules${skipNote} — Running UMAP…`, 'loading');
-    await _tick();
+    // Decide which algorithms to run.
+    // Auto mode = both. Manual mode = whichever mini-tab is active.
+    const manual  = document.getElementById('manual-mode-toggle').checked;
+    const ranUmap = !manual || _activeSettingsTab === 'umap';
+    const ranTsne = !manual || _activeSettingsTab === 'tsne';
 
-    // Read UMAP params (outside try so they're available for the methods panel)
+    // Reset projections — clears any previously rendered plot when the user
+    // switches between manual algorithms.
+    projections = { umap: null, tsne: null };
+
+    // Read all params up front so they're available for the methods panel.
     const nNeighbors = Math.min(
         parseInt(document.getElementById('umap-neighbors').value) || 15,
         fps.length - 1
     );
     const minDist = parseFloat(document.getElementById('umap-min-dist').value) || 0.1;
 
-    let umapCoords;
-    try {
-        const umap = new UMAP({ nNeighbors, minDist, nComponents: 2 });
-        umapCoords = await umap.fitAsync(fps);
-    } catch (e) {
-        _setUploadStatus('UMAP failed: ' + e.message, 'error');
-        return;
-    }
-
-    projections = { umap: umapCoords, tsne: null };
-    _showPlotsGrid();
-    renderPlots();
-
-    // Read t-SNE params (outside try so they're available for the methods panel)
     const tsnePerplexity = Math.min(
         parseFloat(document.getElementById('tsne-perplexity').value) || 30,
         Math.floor((fps.length - 1) / 3)   // perplexity must be < n/3
     );
     const tsneIter = parseInt(document.getElementById('tsne-iterations').value) || 200;
     const tsneLR   = parseFloat(document.getElementById('tsne-lr').value) || 100;
+    const pcaDims  = Math.max(2, Math.min(50, fps.length - 2));
 
-    // PCA target: top 50 components (clamped to n−2 for tiny libraries)
-    const pcaDims = Math.max(2, Math.min(50, fps.length - 2));
+    // Show the grid (with correct single/dual layout) before any rendering
+    _showPlotsGrid({ ranUmap, ranTsne });
 
-    // t-SNE — runs in the worker; progress messages update the status bar
-    _setUploadStatus('UMAP done — t-SNE running… 0%', 'loading');
-    await _tick();
-
-    let tsneCoords;
-    try {
-        tsneCoords = await _runTsneWorker(fps, pcaDims, {
-            dim: 2, perplexity: tsnePerplexity, earlyExaggeration: 4,
-            learningRate: tsneLR, nIter: tsneIter, metric: 'euclidean',
-        });
-    } catch (e) {
-        _setUploadStatus('t-SNE failed: ' + e.message, 'error');
-        return;
+    // ---- UMAP ----
+    if (ranUmap) {
+        _setUploadStatus(`${fps.length} molecules${skipNote} — Running UMAP…`, 'loading');
+        await _tick();
+        try {
+            const umap = new UMAP({ nNeighbors, minDist, nComponents: 2 });
+            projections.umap = await umap.fitAsync(fps);
+        } catch (e) {
+            _setUploadStatus('UMAP failed: ' + e.message, 'error');
+            return;
+        }
+        renderPlots();
     }
 
-    projections.tsne = tsneCoords;
-    renderPlots();
+    // ---- t-SNE ----
+    if (ranTsne) {
+        _setUploadStatus(
+            ranUmap ? 'UMAP done — t-SNE running… 0%' : 't-SNE running… 0%',
+            'loading'
+        );
+        await _tick();
+        try {
+            projections.tsne = await _runTsneWorker(fps, pcaDims, {
+                dim: 2, perplexity: tsnePerplexity, earlyExaggeration: 4,
+                learningRate: tsneLR, nIter: tsneIter, metric: 'euclidean',
+            });
+        } catch (e) {
+            _setUploadStatus('t-SNE failed: ' + e.message, 'error');
+            return;
+        }
+        renderPlots();
+    }
 
     // Update score labels to actual column names
     document.getElementById('score1-btn').textContent = columnMap.score1 || 'Score 1';
@@ -277,9 +317,9 @@ export async function runProjection() {
     document.getElementById('space-score-section').classList.remove('hidden');
     _setUploadStatus(`Done — ${fps.length} molecules${skipNote}`, 'success');
 
-    // Populate the methods bar with parameters used
     _updateMethodsPanel({
         nMols: fps.length, skipped,
+        ranUmap, ranTsne,
         umapNeighbors: nNeighbors, minDist,
         perplexity: tsnePerplexity, nIter: tsneIter, lr: tsneLR,
         pcaDims,
@@ -304,9 +344,17 @@ function _computeFingerprint(smiles) {
     }
 }
 
-function _showPlotsGrid() {
+function _showPlotsGrid({ ranUmap = true, ranTsne = true } = {}) {
     document.getElementById('space-empty-state').classList.add('hidden');
-    document.getElementById('space-plots-grid').classList.remove('hidden');
+    const grid = document.getElementById('space-plots-grid');
+    grid.classList.remove('hidden');
+
+    // Single-plot layout: collapse to one column and hide the unused plot.
+    const single = !(ranUmap && ranTsne);
+    grid.classList.toggle('single-plot', single);
+    document.getElementById('umap-plot').classList.toggle('hidden', !ranUmap);
+    document.getElementById('tsne-plot').classList.toggle('hidden', !ranTsne);
+
     // Card strip is always visible once a projection exists; start with placeholder
     document.getElementById('space-card-strip').classList.remove('hidden');
     _showCardStripPlaceholder();
@@ -323,7 +371,7 @@ function _showCardStripPlaceholder() {
 
 export function renderPlots() {
     if (!projections) return;
-    _renderOnePlot('umap-plot', projections.umap, 'UMAP');
+    if (projections.umap) _renderOnePlot('umap-plot', projections.umap, 'UMAP');
     if (projections.tsne) _renderOnePlot('tsne-plot', projections.tsne, 't-SNE');
 }
 

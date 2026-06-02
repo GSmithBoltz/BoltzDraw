@@ -12,7 +12,7 @@
 import { initKetcher, loadSmiles }               from './ketcher.js';
 import { calculateProperties, renderMolecules } from './properties.js';
 import { updatePkaSmiles, calculatePka }         from './pka.js';
-import { initMolstar, loadByPdbId, loadFromFile, applyBoltzPreset } from './molstar.js';
+import { initMolstar, loadByPdbId, loadFromFile, applyBoltzPreset, setSurfaceColors } from './molstar.js';
 import { convertPeptideToSmiles, supportedCodes } from './peptide.js';
 import { fetchPdbLigands, fetchLigandsByCompIds } from './pdb.js';
 import { parsePdb, parseCif, buildMolFromPdbCoords, GENERIC_LIGAND_CODES } from './fileparse.js';
@@ -173,6 +173,13 @@ const MODES = {
         containerId: 'boltzspace-container',
         btnId:       'btn-space',
     },
+    plot: {
+        subtitle:    'Custom Plot Tool',
+        panelTitle:  'Custom Plot',
+        btnClass:    'active-plot',
+        containerId: 'boltzplot-container',
+        btnId:       'btn-plot',
+    },
 };
 
 let currentMode       = 'draw';
@@ -180,6 +187,7 @@ let panelMode         = 'inspect'; // 'inspect' | 'build'
 let buildView         = 'peptide'; // 'peptide' | 'pdb'
 let molstarInitted    = false;
 let boltzSpaceInitted = false;
+let boltzPlotInitted  = false;
 
 async function switchMode(mode) {
     if (mode === currentMode) return;
@@ -199,9 +207,10 @@ async function switchMode(mode) {
         document.getElementById(c.containerId).classList.toggle('hidden', key !== mode);
     });
 
-    // Hide shared properties panel and its toggle in space mode (BoltzSpace has its own right panel)
-    document.getElementById('properties-panel').classList.toggle('hidden', mode === 'space');
-    document.getElementById('panel-toggle').classList.toggle('hidden', mode === 'space');
+    // Hide shared properties panel in modes that have their own right panel
+    const hidePanel = mode === 'space' || mode === 'plot';
+    document.getElementById('properties-panel').classList.toggle('hidden', hidePanel);
+    document.getElementById('panel-toggle').classList.toggle('hidden', hidePanel);
 
     // Swap panel content
     const isDraw = mode === 'draw';
@@ -239,6 +248,17 @@ async function switchMode(mode) {
         }
     }
 
+    // Lazy-init BoltzPlot on first switch
+    if (mode === 'plot' && !boltzPlotInitted) {
+        boltzPlotInitted = true;
+        try {
+            const { initBoltzPlot } = await import('./boltzplot.js');
+            await initBoltzPlot();
+        } catch (err) {
+            console.error('BoltzPlot init failed:', err);
+        }
+    }
+
     // Lazy-init Molstar on first switch to BoltzStar
     if (mode === 'star' && !molstarInitted) {
         molstarInitted = true;
@@ -256,6 +276,7 @@ async function switchMode(mode) {
 document.getElementById('btn-draw').addEventListener('click',  () => switchMode('draw'));
 document.getElementById('btn-star').addEventListener('click',  () => switchMode('star'));
 document.getElementById('btn-space').addEventListener('click', () => switchMode('space'));
+document.getElementById('btn-plot').addEventListener('click',  () => switchMode('plot'));
 
 
 
@@ -925,12 +946,50 @@ document.getElementById('structure-file-input').addEventListener('change', (e) =
 });
 
 // ----------------------------------------------------------------
-// BoltzStar - Apply Boltz Style preset
+// BoltzViewer - Apply Boltz Style preset
 // ----------------------------------------------------------------
 
 document.getElementById('apply-preset-btn').addEventListener('click', () => {
     applyBoltzPreset();
 });
+
+// ----------------------------------------------------------------
+// BoltzViewer - Preset / Manual mode toggle
+// ----------------------------------------------------------------
+
+const _presetBtn   = document.getElementById('style-mode-preset');
+const _manualBtn   = document.getElementById('style-mode-manual');
+const _presetView  = document.getElementById('style-preset-view');
+const _manualView  = document.getElementById('style-manual-view');
+const _proteinPick = document.getElementById('protein-color-input');
+const _ligandPick  = document.getElementById('ligand-color-input');
+
+function _setStyleMode(mode) {
+    const isPreset = mode === 'preset';
+    _presetBtn.classList.toggle('active', isPreset);
+    _manualBtn.classList.toggle('active', !isPreset);
+    _presetView.classList.toggle('hidden', !isPreset);
+    _manualView.classList.toggle('hidden',  isPreset);
+}
+
+_presetBtn.addEventListener('click', () => _setStyleMode('preset'));
+_manualBtn.addEventListener('click', () => _setStyleMode('manual'));
+
+// Hex string "#RRGGBB" → 0xRRGGBB integer for Molstar Color
+function _hexToInt(hex) {
+    return parseInt(hex.slice(1), 16);
+}
+
+function _applyManualColors() {
+    setSurfaceColors({
+        proteinColor: _hexToInt(_proteinPick.value),
+        ligandColor:  _hexToInt(_ligandPick.value),
+    });
+}
+
+// 'input' fires on every drag; 'change' on commit. Use 'input' for live feel.
+_proteinPick.addEventListener('input', _applyManualColors);
+_ligandPick.addEventListener('input',  _applyManualColors);
 
 // ----------------------------------------------------------------
 // Status helpers

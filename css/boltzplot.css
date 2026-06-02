@@ -1,0 +1,67 @@
+/* ================================================================
+   BoltzPlot — Custom scatter plot tool
+   Mirrors BoltzSpace layout pattern.
+================================================================ */
+
+#boltzplot-container {
+    display: flex;
+    height: 100%;
+    width: 100%;
+}
+
+/* ---- Plot area (left) ---- */
+
+#bp-plot-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-cream);
+    overflow: hidden;
+    position: relative;
+    min-width: 0;
+}
+
+#bp-empty-state {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    gap: 12px;
+    padding: 40px;
+    text-align: center;
+}
+
+#bp-empty-state svg {
+    opacity: 0.25;
+    color: var(--green-sage);
+}
+
+#bp-empty-state p {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+#bp-plot {
+    flex: 1;
+    width: 100%;
+    min-height: 0;
+}
+
+#bp-plot.hidden {
+    display: none;
+}
+
+/* ---- Right panel ---- */
+
+#bp-panel {
+    width: 320px;
+    flex-shrink: 0;
+    background: var(--bg-white);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+}

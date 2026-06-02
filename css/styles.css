@@ -175,6 +175,14 @@ body {
 .mode-btn.active-space .btn-brand,
 .mode-btn.active-space .btn-product { color: white; }
 
+/* Active BoltzPlot - slate blue pill, white text */
+.mode-btn.active-plot {
+    background: #5078D2;
+    color: white;
+}
+.mode-btn.active-plot .btn-brand,
+.mode-btn.active-plot .btn-product { color: white; }
+
 .header-divider {
     width: 1px;
     height: 18px;
@@ -1417,7 +1425,7 @@ body {
 }
 
 /* ================================================================
-   BOLTZSTAR PANEL
+   BOLTZVIEWER PANEL
 ================================================================ */
 .star-panel {
     flex: 1;
@@ -1596,6 +1604,72 @@ body {
 .preset-val {
     font-size: 11px;
     color: var(--text-muted);
+}
+
+/* Preset / Manual segmented toggle */
+.style-mode-toggle {
+    display: flex;
+    gap: 2px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 2px;
+    margin-bottom: 4px;
+}
+
+.style-mode-btn {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    padding: 6px 10px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+    font-family: inherit;
+    letter-spacing: 0.1px;
+    transition: all 0.15s;
+}
+
+.style-mode-btn:hover {
+    color: var(--text-primary);
+}
+
+.style-mode-btn.active {
+    background: var(--green-dark);
+    color: white;
+    font-weight: 600;
+}
+
+/* Manual color rows */
+.color-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 0;
+}
+
+.color-input {
+    width: 28px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.color-input::-webkit-color-swatch-wrapper { padding: 2px; }
+.color-input::-webkit-color-swatch         { border: none; border-radius: 2px; }
+.color-input::-moz-color-swatch            { border: none; border-radius: 2px; }
+
+.manual-hint {
+    margin: 6px 0 0;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-style: italic;
 }
 
 /* Apply button */
