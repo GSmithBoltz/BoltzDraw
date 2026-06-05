@@ -12,7 +12,7 @@
 import { initKetcher, loadSmiles }               from './ketcher.js';
 import { calculateProperties, renderMolecules } from './properties.js';
 import { updatePkaSmiles, calculatePka }         from './pka.js';
-import { initMolstar, loadByPdbId, loadFromFile, applyBoltzPreset, setSurfaceColors } from './molstar.js';
+import { initMolstar, loadByPdbId, loadFromFile, loadFromData, applyBoltzPreset, setSurfaceColors } from './molstar.js';
 import { convertPeptideToSmiles, supportedCodes } from './peptide.js';
 import { fetchPdbLigands, fetchLigandsByCompIds } from './pdb.js';
 import { parsePdb, parseCif, buildMolFromPdbCoords, GENERIC_LIGAND_CODES } from './fileparse.js';
@@ -26,6 +26,9 @@ let isKetcherReady = false;
 let currentMolecules = [];
 let currentView    = 'cards';   // 'cards' | 'pka'
 
+// True only when the local Flask backend responds to /ping
+let _backendAvailable = false;
+
 const RDKIT_CDN_BASE = 'https://cdn.jsdelivr.net/npm/@rdkit/rdkit@2025.3.4-1.0.0/dist/';
 
 // ----------------------------------------------------------------
@@ -33,10 +36,22 @@ const RDKIT_CDN_BASE = 'https://cdn.jsdelivr.net/npm/@rdkit/rdkit@2025.3.4-1.0.0
 // ----------------------------------------------------------------
 
 async function boot() {
-    // Run RDKit and Ketcher init in parallel - both must be ready
-    // before the loading overlay is dismissed.
+    // Run RDKit, Ketcher, and backend probe in parallel.
     _initKetcher();
+    _checkBackend();       // fire-and-forget — doesn't block the loading overlay
     await _initRDKit();
+}
+
+async function _checkBackend() {
+    try {
+        const res = await fetch('/ping', {
+            signal: AbortSignal.timeout(2000),
+        });
+        const json = await res.json();
+        _backendAvailable = res.ok && json.backend === 'boltzstar';
+    } catch {
+        _backendAvailable = false;
+    }
 }
 
 boot();
@@ -195,9 +210,8 @@ async function switchMode(mode) {
 
     const cfg = MODES[mode];
 
-    // Update header
+    // Update header subtitle
     document.getElementById('app-subtitle').textContent = cfg.subtitle;
-    document.getElementById('panel-title').textContent  = cfg.panelTitle;
 
     // Swap button active classes and main containers — driven by MODES so
     // adding a new mode here never requires touching this loop.
@@ -940,10 +954,360 @@ document.getElementById('pdb-id-input').addEventListener('keydown', (e) => {
 // BoltzStar - Load from file
 // ----------------------------------------------------------------
 
-document.getElementById('structure-file-input').addEventListener('change', (e) => {
+// Track the last-loaded file so the Hydrate buttons can re-send it
+let _hydrateFileData    = null;
+let _hydrateFileName    = null;
+let _hydratedPdbData    = null;   // last successful hydration result
+let _hydratedOutputName = null;   // suggested download filename
+
+document.getElementById('structure-file-input').addEventListener('change', async (e) => {
     const file = e.target.files[0];
-    if (file) loadFromFile(file, _setStarStatus);
+    if (!file) return;
+
+    // Cache the raw text for the Hydrate pipeline
+    _hydrateFileData = await file.text();
+    _hydrateFileName = file.name;
+
+    // Cache for PLIP (uses same file as hydrate)
+    _plipFileData = _hydrateFileData;
+    _plipFileName = _hydrateFileName;
+
+    // Show Analysis tools only when the local backend is running
+    if (_backendAvailable) {
+        document.getElementById('hydrate-section').classList.remove('hidden');
+        document.getElementById('quick-hydrate-btn').disabled = false;
+        document.getElementById('full-hydrate-btn').disabled  = false;
+        document.getElementById('hydrate-status').classList.add('hidden');
+
+        document.getElementById('plip-section').classList.remove('hidden');
+        document.getElementById('run-plip-btn').disabled = false;
+        document.getElementById('plip-results').innerHTML = '';
+        document.getElementById('plip-status').classList.add('hidden');
+    }
+
+    loadFromFile(file, _setStarStatus);
 });
+
+// ----------------------------------------------------------------
+// BoltzStar - Quick Hydrate / Full Hydrate buttons
+// ----------------------------------------------------------------
+
+async function _doHydrate(mode) {
+    if (!_hydrateFileData) return;
+
+    const quickBtn = document.getElementById('quick-hydrate-btn');
+    const fullBtn  = document.getElementById('full-hydrate-btn');
+    const statusEl = document.getElementById('hydrate-status');
+    const activeBtn = mode === 'quick' ? quickBtn : fullBtn;
+
+    quickBtn.disabled  = true;
+    fullBtn.disabled   = true;
+    activeBtn.textContent = mode === 'quick' ? '⚡ Running…' : '🔬 Running…';
+    statusEl.textContent  = mode === 'quick'
+        ? 'Running geometric water placement…'
+        : 'Running WaterKit pipeline (~40 s)…';
+    statusEl.className = 'star-status loading';
+    statusEl.classList.remove('hidden');
+
+    try {
+        const response = await fetch(`/hydrate?mode=${mode}`, {
+            method:  'POST',
+            headers: {
+                'Content-Type': 'text/plain; charset=utf-8',
+                'X-Filename':   _hydrateFileName || 'structure.cif',
+            },
+            body: _hydrateFileData,
+        });
+
+        if (!response.ok) {
+            let msg = `Server error ${response.status}`;
+            try { msg = (await response.json()).error || msg; } catch {}
+            throw new Error(msg);
+        }
+
+        const hydratedPdb = await response.text();
+        const waterCount  = parseInt(response.headers.get('X-Water-Count') || '0', 10);
+
+        await loadFromData(hydratedPdb, 'pdb', _setStarStatus);
+
+        // Store result for download and PLIP
+        _hydratedPdbData    = hydratedPdb;
+        _hydratedOutputName = (_hydrateFileName || 'structure')
+            .replace(/\.(cif|pdb|mmcif)$/i, '') + `_hydrated_${mode}.pdb`;
+        document.getElementById('download-hydrated-btn').classList.remove('hidden');
+
+        // PLIP now analyses the hydrated structure
+        _plipFileData = hydratedPdb;
+        _plipFileName = _hydratedOutputName;
+        document.getElementById('plip-results').innerHTML = '';
+        document.getElementById('plip-status').classList.add('hidden');
+
+        const label = mode === 'quick' ? 'bridging' : 'energy-scored';
+        statusEl.textContent =
+            `${waterCount} ${label} water${waterCount !== 1 ? 's' : ''} placed`;
+        statusEl.className = 'star-status success';
+
+        activeBtn.textContent = mode === 'quick' ? '✓ Quick' : '✓ Full';
+        setTimeout(() => {
+            quickBtn.textContent  = '⚡ Quick';
+            fullBtn.textContent   = '🔬 Full';
+            quickBtn.disabled = false;
+            fullBtn.disabled  = false;
+        }, 3000);
+
+    } catch (err) {
+        console.error('Hydration failed:', err);
+        statusEl.textContent  = `Hydration failed: ${err.message}`;
+        statusEl.className    = 'star-status error';
+        quickBtn.textContent  = '⚡ Quick';
+        fullBtn.textContent   = '🔬 Full';
+        quickBtn.disabled = false;
+        fullBtn.disabled  = false;
+    }
+}
+
+document.getElementById('quick-hydrate-btn').addEventListener('click', () => _doHydrate('quick'));
+document.getElementById('full-hydrate-btn').addEventListener('click',  () => _doHydrate('full'));
+
+// ----------------------------------------------------------------
+// BoltzStar - Analysis / Style tab switching
+// ----------------------------------------------------------------
+
+function _setStarTab(tab) {
+    const isAnalysis = tab === 'analysis';
+    document.getElementById('star-tab-analysis').classList.toggle('active',  isAnalysis);
+    document.getElementById('star-tab-style').classList.toggle('active',    !isAnalysis);
+    document.getElementById('star-panel-analysis').classList.toggle('hidden', !isAnalysis);
+    document.getElementById('star-panel-style').classList.toggle('hidden',    isAnalysis);
+}
+
+document.getElementById('star-tab-analysis').addEventListener('click', () => _setStarTab('analysis'));
+document.getElementById('star-tab-style').addEventListener('click',    () => _setStarTab('style'));
+
+// ----------------------------------------------------------------
+// BoltzStar - PLIP analysis
+// ----------------------------------------------------------------
+
+// Track structure data available for PLIP (set when file loaded or hydration done)
+let _plipFileData = null;
+let _plipFileName = null;
+
+document.getElementById('download-hydrated-btn').addEventListener('click', () => {
+    if (!_hydratedPdbData) return;
+    const blob = new Blob([_hydratedPdbData], { type: 'chemical/x-pdb' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = _hydratedOutputName || 'hydrated.pdb';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+});
+
+document.getElementById('run-plip-btn').addEventListener('click', async () => {
+    if (!_plipFileData) return;
+
+    const btn      = document.getElementById('run-plip-btn');
+    const statusEl = document.getElementById('plip-status');
+    const resultsEl = document.getElementById('plip-results');
+
+    btn.disabled    = true;
+    btn.textContent = 'Analysing…';
+    statusEl.textContent = 'Running PLIP interaction analysis…';
+    statusEl.className   = 'star-status loading';
+    statusEl.classList.remove('hidden');
+    resultsEl.innerHTML  = '';
+
+    try {
+        const response = await fetch('/plip', {
+            method:  'POST',
+            headers: {
+                'Content-Type': 'text/plain; charset=utf-8',
+                'X-Filename':   _plipFileName || 'structure.pdb',
+            },
+            body: _plipFileData,
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || data.error) {
+            throw new Error(data.error || `Server error ${response.status}`);
+        }
+
+        if (!data.sites || data.sites.length === 0) {
+            statusEl.textContent = 'No ligand binding sites detected.';
+            statusEl.className   = 'star-status info';
+            btn.textContent      = 'Run PLIP Analysis';
+            btn.disabled         = false;
+            return;
+        }
+
+        // Render results
+        resultsEl.innerHTML = data.sites.map(site => _renderPlipSite(site, data.sites.length)).join('');
+        _attachPlipToggles();
+
+        const total = data.sites.reduce((s, site) => s + site.total, 0);
+        statusEl.textContent = `${total} interaction${total !== 1 ? 's' : ''} found across ${data.sites.length} site${data.sites.length !== 1 ? 's' : ''}`;
+        statusEl.className   = 'star-status success';
+
+    } catch (err) {
+        console.error('PLIP failed:', err);
+        statusEl.textContent = `Analysis failed: ${err.message}`;
+        statusEl.className   = 'star-status error';
+    }
+
+    btn.textContent = 'Run PLIP Analysis';
+    btn.disabled    = false;
+});
+
+// ---- PLIP interaction type metadata ----
+const PLIP_TYPES = {
+    hbonds:         { label: 'Hydrogen Bonds',    color: '#2563eb' },
+    hydrophobic:    { label: 'Hydrophobic',        color: '#525252' },
+    pistacking:     { label: 'π-Stacking',         color: '#7c3aed' },
+    pication:       { label: 'π-Cation',           color: '#b45309' },
+    saltbridges:    { label: 'Salt Bridges',       color: '#dc2626' },
+    waterbridges:   { label: 'Water Bridges',      color: '#0891b2' },
+    halogenbonds:   { label: 'Halogen Bonds',      color: '#16a34a' },
+    metalcomplexes: { label: 'Metal Complexes',    color: '#9d174d' },
+};
+
+// Column definitions per interaction type
+const PLIP_COLS = {
+    hbonds: [
+        { key: 'resnr',     head: 'Res#' },
+        { key: 'restype',   head: 'AA' },
+        { key: 'reschain',  head: 'Chain' },
+        { key: 'dist_h_a',  head: 'Dist H-A (Å)' },
+        { key: 'dist_d_a',  head: 'Dist D-A (Å)' },
+        { key: 'don_angle', head: 'Angle (°)' },
+        { key: 'protisdon', head: 'Prot donor', bool: true },
+        { key: 'sidechain', head: 'Side chain', bool: true },
+        { key: 'donortype', head: 'Donor' },
+        { key: 'acctype',   head: 'Acceptor' },
+    ],
+    hydrophobic: [
+        { key: 'resnr',    head: 'Res#' },
+        { key: 'restype',  head: 'AA' },
+        { key: 'reschain', head: 'Chain' },
+        { key: 'dist',     head: 'Dist (Å)' },
+    ],
+    pistacking: [
+        { key: 'resnr',     head: 'Res#' },
+        { key: 'restype',   head: 'AA' },
+        { key: 'reschain',  head: 'Chain' },
+        { key: 'cent_dist', head: 'Dist (Å)' },
+        { key: 'angle',     head: 'Angle (°)' },
+        { key: 'offset',    head: 'Offset (Å)' },
+        { key: 'type',      head: 'Type' },
+    ],
+    pication: [
+        { key: 'resnr',       head: 'Res#' },
+        { key: 'restype',     head: 'AA' },
+        { key: 'reschain',    head: 'Chain' },
+        { key: 'dist',        head: 'Dist (Å)' },
+        { key: 'offset',      head: 'Offset (Å)' },
+        { key: 'protcharged', head: 'Prot charged', bool: true },
+    ],
+    saltbridges: [
+        { key: 'resnr',    head: 'Res#' },
+        { key: 'restype',  head: 'AA' },
+        { key: 'reschain', head: 'Chain' },
+        { key: 'dist',     head: 'Dist (Å)' },
+        { key: 'protispos',head: 'Prot +ve', bool: true },
+        { key: 'lig_group',head: 'Lig group' },
+    ],
+    waterbridges: [
+        { key: 'resnr',       head: 'Res#' },
+        { key: 'restype',     head: 'AA' },
+        { key: 'reschain',    head: 'Chain' },
+        { key: 'dist_a_w',    head: 'Dist A-W (Å)' },
+        { key: 'dist_d_w',    head: 'Dist D-W (Å)' },
+        { key: 'don_angle',   head: 'D angle (°)' },
+        { key: 'water_angle', head: 'W angle (°)' },
+        { key: 'protisdon',   head: 'Prot donor', bool: true },
+        { key: 'donortype',   head: 'Donor' },
+        { key: 'acctype',     head: 'Acceptor' },
+    ],
+    halogenbonds: [
+        { key: 'resnr',     head: 'Res#' },
+        { key: 'restype',   head: 'AA' },
+        { key: 'reschain',  head: 'Chain' },
+        { key: 'dist',      head: 'Dist (Å)' },
+        { key: 'don_angle', head: 'D angle (°)' },
+        { key: 'acc_angle', head: 'A angle (°)' },
+        { key: 'sidechain', head: 'Side chain', bool: true },
+        { key: 'donortype', head: 'Halogen' },
+        { key: 'acctype',   head: 'Acceptor' },
+    ],
+    metalcomplexes: [
+        { key: 'resnr',        head: 'Res#' },
+        { key: 'restype',      head: 'AA' },
+        { key: 'reschain',     head: 'Chain' },
+        { key: 'metal_type',   head: 'Metal' },
+        { key: 'target_type',  head: 'Target' },
+        { key: 'dist',         head: 'Dist (Å)' },
+        { key: 'coordination', head: 'Coord.' },
+        { key: 'geometry',     head: 'Geometry' },
+    ],
+};
+
+function _renderPlipSite(site, numSites) {
+    const ixt = site.interactions;
+
+    const siteLabel = numSites > 1
+        ? `<div class="plip-site-id">${site.id}</div>` : '';
+
+    const groups = Object.entries(PLIP_TYPES)
+        .filter(([key]) => (ixt[key] || []).length > 0)   // hide empty types
+        .map(([key, meta]) => {
+            const items = ixt[key] || [];
+            const cols  = PLIP_COLS[key] || [];
+
+            const thead = cols.map(c => `<th>${c.head}</th>`).join('');
+            const tbody = items.map((item, i) => {
+                const cells = cols.map(c => {
+                    const v = item[c.key];
+                    if (c.bool) return `<td class="plip-bool">${v ? '✓' : '✗'}</td>`;
+                    return `<td>${v ?? '—'}</td>`;
+                }).join('');
+                return `<tr><td class="plip-idx">${i + 1}</td>${cells}</tr>`;
+            }).join('');
+
+            return `<div class="plip-group open">
+                <div class="plip-group-header" data-plip-toggle>
+                    <span class="plip-type-label" style="border-color:${meta.color};color:${meta.color}">${meta.label}</span>
+                    <span class="plip-group-count" style="background:${meta.color}">${items.length}</span>
+                </div>
+                <div class="plip-group-body open">
+                    <div class="plip-table-wrap">
+                        <table class="plip-table">
+                            <thead><tr><th>#</th>${thead}</tr></thead>
+                            <tbody>${tbody}</tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>`;
+        }).join('');
+
+    if (!groups) {
+        return siteLabel + '<p class="plip-none">No interactions detected for this site.</p>';
+    }
+
+    return siteLabel + groups;
+}
+
+function _attachPlipToggles() {
+    document.querySelectorAll('[data-plip-toggle]').forEach(header => {
+        header.addEventListener('click', () => {
+            const body = header.nextElementSibling;
+            if (body && body.classList.contains('plip-group-body')) {
+                body.classList.toggle('open');
+            }
+        });
+    });
+}
 
 // ----------------------------------------------------------------
 // BoltzViewer - Apply Boltz Style preset

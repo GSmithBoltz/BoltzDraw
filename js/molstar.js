@@ -104,6 +104,29 @@ export async function loadByPdbId(pdbId, onStatus) {
     }
 }
 
+/**
+ * Load a structure from a raw string (used by the Hydrate pipeline).
+ * format: 'pdb' | 'mmcif'
+ */
+export async function loadFromData(data, format, onStatus) {
+    if (!viewer) throw new Error('Molstar not initialised');
+
+    try {
+        await viewer.plugin.clear();
+        molLoaded = false;
+
+        await viewer.loadStructureFromData(data, format, false);
+
+        molLoaded = true;
+        surfacesApplied = false;
+        document.getElementById('apply-preset-btn').disabled = false;
+    } catch (err) {
+        console.error('loadFromData failed:', err);
+        onStatus?.(`Failed to load hydrated structure`, 'error');
+        throw err;
+    }
+}
+
 export async function loadFromFile(file, onStatus) {
     if (!viewer) throw new Error('Molstar not initialised');
 
@@ -217,6 +240,34 @@ export async function applyBoltzPreset(opts = {}) {
                     console.log(`  "${key}" → ${isLigand ? 'yellow solid' : 'blue 30%'} surface`);
                 } catch (e) {
                     console.warn(`  addRepresentation failed for "${key}":`, e.message);
+                }
+            }
+
+            // Step 3: add 'interactions' representation to polymer component(s).
+            // Molstar's inter-unit visual will automatically draw dashed lines to
+            // water (HOH) and ligand atoms within H-bond distance.  We must add
+            // this AFTER the surface loop because the surface rebuild above
+            // deletes every auto-created representation including the default
+            // 'interactions' repr that Molstar creates on load.
+            for (const comp of components) {
+                const key = (comp.key || '').toLowerCase();
+                // Only add to polymer (protein backbone) components — the
+                // inter-unit visual covers contacts to water and ligand too.
+                if (key.includes('water') || key.includes('ion') || key.includes('coarse')) continue;
+                if (key.includes('ligand') || key.includes('non-polymer') || key.includes('branched')) continue;
+                try {
+                    await plugin.builders.structure.representation.addRepresentation(
+                        comp.cell,
+                        {
+                            type: 'interactions',
+                            typeParams: {
+                                visuals: ['intra-unit', 'inter-unit'],
+                            },
+                        }
+                    );
+                    console.log(`  "${key}" → interactions repr added (dashed H-bond lines)`);
+                } catch (e) {
+                    console.warn(`  interactions repr failed for "${key}":`, e.message);
                 }
             }
         }

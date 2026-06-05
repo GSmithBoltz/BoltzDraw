@@ -1673,6 +1673,163 @@ body {
 }
 
 /* Apply button */
+/* Hydrate button row */
+.hydrate-btn-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.hydrate-btn {
+    flex: 1;
+    padding: 9px 0;
+    background: var(--green-dark);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.15s, opacity 0.2s;
+}
+
+.hydrate-btn:hover:not(:disabled) {
+    background: var(--green-deep);
+}
+
+.hydrate-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+/* Full hydrate has a slightly lighter tint to visually distinguish */
+.hydrate-btn-full {
+    background: var(--green-sage, #67826b);
+}
+
+.hydrate-btn-full:hover:not(:disabled) {
+    background: var(--green-dark);
+}
+
+/* ---- PLIP results ---- */
+#plip-results {
+    margin-top: 8px;
+}
+
+.plip-site-id {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 4px 2px 8px;
+}
+
+.plip-group {
+    margin-bottom: 6px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.plip-group-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 10px;
+    background: var(--bg-cream);
+    cursor: pointer;
+    user-select: none;
+}
+
+.plip-group-header:hover {
+    background: var(--border);
+}
+
+.plip-type-label {
+    font-size: 12px;
+    font-weight: 700;
+    border-bottom: 2px solid currentColor;
+    padding-bottom: 1px;
+}
+
+.plip-group-count {
+    font-size: 10px;
+    font-weight: 700;
+    color: white;
+    border-radius: 10px;
+    padding: 1px 7px;
+}
+
+.plip-group-body {
+    display: none;
+    background: var(--bg-white);
+}
+
+.plip-group-body.open {
+    display: block;
+}
+
+.plip-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.plip-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10.5px;
+    font-family: inherit;
+}
+
+.plip-table thead th {
+    background: var(--bg-cream);
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    padding: 5px 8px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+}
+
+.plip-table tbody tr:hover {
+    background: var(--bg-cream);
+}
+
+.plip-table tbody tr + tr {
+    border-top: 1px solid var(--border);
+}
+
+.plip-table td {
+    padding: 5px 8px;
+    color: var(--text-primary);
+    white-space: nowrap;
+}
+
+.plip-idx {
+    color: var(--text-muted);
+    font-size: 10px;
+    width: 20px;
+    text-align: center;
+}
+
+.plip-bool {
+    text-align: center;
+    font-size: 11px;
+}
+
+.plip-none {
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 12px 4px;
+    text-align: center;
+}
+
+/* ---- BoltzStar apply button ---- */
 .star-apply-btn {
     width: 100%;
     padding: 10px;
