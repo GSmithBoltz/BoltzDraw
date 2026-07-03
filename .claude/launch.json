@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "BoltzDraw",
+      "runtimeExecutable": "/Users/geoffrey/miniconda3/envs/boltzstar/bin/python",
+      "runtimeArgs": ["-u", "server.py"],
+      "port": 4400,
+      "autoPort": true
+    },
+    {
+      "name": "BoltzDraw-mock",
+      "runtimeExecutable": "/bin/sh",
+      "runtimeArgs": ["-c", "ADME_MOCK=1 PKA_MOCK=1 PORT=4455 /Users/geoffrey/miniconda3/envs/boltzstar/bin/python -u server.py"],
+      "port": 4455,
+      "autoPort": false
+    }
+  ]
+}

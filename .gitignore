@@ -1,0 +1,20 @@
+# Local testing secrets — NEVER commit. Prefills the Boltz API key + test target.
+local_test_config.json
+
+# Common secret/env files
+.env
+.env.local
+*.secret
+
+# Python / runtime cruft
+__pycache__/
+*.pyc
+.DS_Store
+
+# Agent session data / transcripts — never publish to a public repo
+.agents/
+
+# Experimental biotite WaterKit (vendored): ignore the venv + SW-map cache, keep the source
+vendor/waterkit-biotite/.venv/
+vendor/waterkit-biotite/.sw_cache/
+vendor/waterkit-biotite/**/__pycache__/

@@ -273,7 +273,7 @@
             <!-- Inspect sub-tabs: Cards / pKa / Export (shown in Inspect mode only) -->
             <div id="inspect-tabs">
                 <button id="view-cards" class="active">Cards</button>
-                <button id="view-pka">pKa</button>
+                <button id="view-pka">Calculate</button>
                 <button id="view-export">Export</button>
             </div>
 
@@ -299,10 +299,36 @@
                 </div>
             </div>
 
-            <!-- BoltzDraw: pKa tab -->
+            <!-- BoltzDraw: Calculate tab (ADME + pKa) -->
             <div class="pka-container" id="pka-container">
+
+                <!-- ADME (Boltz cloud, via local backend) -->
+                <div class="adme-section" id="adme-section">
+                    <label class="pka-label">ADME · Boltz Cloud</label>
+                    <input type="password" id="adme-api-key" class="adme-key-input"
+                           placeholder="Boltz API key" autocomplete="off" spellcheck="false">
+                    <div class="adme-key-note">Sent only to your local backend, never stored.</div>
+
+                    <div class="adme-mol-list" id="adme-mol-list">
+                        <div class="adme-empty">Draw a molecule in the editor</div>
+                    </div>
+
+                    <button class="pka-calculate-btn" id="run-adme-btn" disabled>
+                        Run ADME
+                    </button>
+
+                    <div class="adme-results" id="adme-results"></div>
+
+                    <div class="adme-unavailable hidden" id="adme-unavailable">
+                        Start the local backend (<code>python server.py</code>) to run ADME.
+                    </div>
+                </div>
+
+                <div class="calc-divider"></div>
+
+                <!-- pKa (local backend, falls back to hosted service) -->
                 <div class="pka-input-section">
-                    <label class="pka-label">Selected Molecule</label>
+                    <label class="pka-label">pKa</label>
                     <div class="smiles-display" id="pka-smiles">Draw a molecule in the editor</div>
                     <button class="pka-calculate-btn" id="calculate-pka-btn" disabled>
                         Calculate pKa
@@ -534,10 +560,14 @@
                             <button class="hydrate-btn hydrate-btn-full" id="full-hydrate-btn" disabled>
                                 🔬 Full
                             </button>
+                            <button class="hydrate-btn hydrate-btn-biotite" id="biotite-hydrate-btn" disabled>
+                                🧪 Biotite
+                            </button>
                         </div>
                         <p class="manual-hint">
                             <strong>Quick</strong> — geometric bridging (~3 s) &nbsp;·&nbsp;
-                            <strong>Full</strong> — WaterKit energy-scored (~40 s)
+                            <strong>Full</strong> — WaterKit energy-scored (~40 s) &nbsp;·&nbsp;
+                            <strong>Biotite</strong> — experimental rewrite (~40 s, all cores)
                         </p>
                         <div class="star-status hidden" id="hydrate-status"></div>
                         <button class="star-apply-btn hidden" id="download-hydrated-btn">

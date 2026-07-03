@@ -12,6 +12,7 @@
 import { initKetcher, loadSmiles }               from './ketcher.js';
 import { calculateProperties, renderMolecules } from './properties.js';
 import { updatePkaSmiles, calculatePka }         from './pka.js';
+import { updateAdmeMolecules, runAdme }          from './adme.js';
 import { initMolstar, loadByPdbId, loadFromFile, loadFromData, applyBoltzPreset, setSurfaceColors } from './molstar.js';
 import { convertPeptideToSmiles, supportedCodes } from './peptide.js';
 import { fetchPdbLigands, fetchLigandsByCompIds } from './pdb.js';
@@ -52,6 +53,9 @@ async function _checkBackend() {
     } catch {
         _backendAvailable = false;
     }
+    // The probe is fire-and-forget, so refresh the ADME gate once it resolves
+    // (the user may already be sitting on the Calculate tab).
+    _updateAdmeGate();
 }
 
 boot();
@@ -131,6 +135,8 @@ function _onSmilesChange(smiles) {
         renderMolecules(currentMolecules);
     } else {
         updatePkaSmiles(currentMolecules);
+        updateAdmeMolecules(currentMolecules);
+        _updateAdmeGate();
     }
 
     // Update export tab info strip
@@ -349,8 +355,13 @@ function _setDrawView(view) {
     document.getElementById('pka-container').classList.toggle('active',  isPka);
     document.getElementById('export-container').classList.toggle('active', isExport);
 
-    if (isCards) renderMolecules(currentMolecules);
-    else if (isPka) updatePkaSmiles(currentMolecules);
+    if (isCards) {
+        renderMolecules(currentMolecules);
+    } else if (isPka) {
+        updatePkaSmiles(currentMolecules);
+        updateAdmeMolecules(currentMolecules);
+        _updateAdmeGate();
+    }
 
     currentView = view;
 }
@@ -360,11 +371,26 @@ document.getElementById('view-pka').addEventListener('click',    () => _setDrawV
 document.getElementById('view-export').addEventListener('click', () => _setDrawView('export'));
 
 // ----------------------------------------------------------------
-// pKa button
+// Calculate tab: ADME (cloud) + pKa (local) buttons
 // ----------------------------------------------------------------
 
+// ADME needs the local backend (it proxies the pasted key to Boltz cloud),
+// so gate the key input + Run button on backend availability. Mirrors the
+// hydrate/PLIP gating pattern.
+function _updateAdmeGate() {
+    const ok = _backendAvailable;
+    document.getElementById('adme-unavailable').classList.toggle('hidden', ok);
+    document.getElementById('adme-api-key').disabled = !ok;
+    document.getElementById('run-adme-btn').disabled = !ok || currentMolecules.length === 0;
+}
+
+document.getElementById('run-adme-btn').addEventListener('click', () => {
+    const apiKey = document.getElementById('adme-api-key').value.trim();
+    runAdme(currentMolecules, apiKey);
+});
+
 document.getElementById('calculate-pka-btn').addEventListener('click', () => {
-    calculatePka(currentMolecules);
+    calculatePka(currentMolecules, _backendAvailable);
 });
 
 // ----------------------------------------------------------------
@@ -975,8 +1001,9 @@ document.getElementById('structure-file-input').addEventListener('change', async
     // Show Analysis tools only when the local backend is running
     if (_backendAvailable) {
         document.getElementById('hydrate-section').classList.remove('hidden');
-        document.getElementById('quick-hydrate-btn').disabled = false;
-        document.getElementById('full-hydrate-btn').disabled  = false;
+        document.getElementById('quick-hydrate-btn').disabled   = false;
+        document.getElementById('full-hydrate-btn').disabled    = false;
+        document.getElementById('biotite-hydrate-btn').disabled = false;
         document.getElementById('hydrate-status').classList.add('hidden');
 
         document.getElementById('plip-section').classList.remove('hidden');
@@ -992,20 +1019,40 @@ document.getElementById('structure-file-input').addEventListener('change', async
 // BoltzStar - Quick Hydrate / Full Hydrate buttons
 // ----------------------------------------------------------------
 
+// Per-mode UI metadata for the three hydrate buttons.
+const _HYDRATE_MODES = {
+    quick:   { id: 'quick-hydrate-btn',   idle: '⚡ Quick',   running: '⚡ Running…', done: '✓ Quick',
+               status: 'Running geometric water placement…', resultLabel: 'bridging' },
+    full:    { id: 'full-hydrate-btn',    idle: '🔬 Full',    running: '🔬 Running…', done: '✓ Full',
+               status: 'Running WaterKit pipeline (~40 s)…', resultLabel: 'energy-scored' },
+    biotite: { id: 'biotite-hydrate-btn', idle: '🧪 Biotite', running: '🧪 Running…', done: '✓ Biotite',
+               status: 'Running Biotite WaterKit (experimental, ~40 s)…', resultLabel: 'Biotite' },
+};
+
+function _setHydrateButtonsDisabled(disabled) {
+    for (const m of Object.values(_HYDRATE_MODES)) {
+        document.getElementById(m.id).disabled = disabled;
+    }
+}
+
+function _resetHydrateButtons() {
+    for (const m of Object.values(_HYDRATE_MODES)) {
+        const btn = document.getElementById(m.id);
+        btn.textContent = m.idle;
+        btn.disabled = false;
+    }
+}
+
 async function _doHydrate(mode) {
     if (!_hydrateFileData) return;
 
-    const quickBtn = document.getElementById('quick-hydrate-btn');
-    const fullBtn  = document.getElementById('full-hydrate-btn');
-    const statusEl = document.getElementById('hydrate-status');
-    const activeBtn = mode === 'quick' ? quickBtn : fullBtn;
+    const meta      = _HYDRATE_MODES[mode];
+    const activeBtn = document.getElementById(meta.id);
+    const statusEl  = document.getElementById('hydrate-status');
 
-    quickBtn.disabled  = true;
-    fullBtn.disabled   = true;
-    activeBtn.textContent = mode === 'quick' ? '⚡ Running…' : '🔬 Running…';
-    statusEl.textContent  = mode === 'quick'
-        ? 'Running geometric water placement…'
-        : 'Running WaterKit pipeline (~40 s)…';
+    _setHydrateButtonsDisabled(true);
+    activeBtn.textContent = meta.running;
+    statusEl.textContent  = meta.status;
     statusEl.className = 'star-status loading';
     statusEl.classList.remove('hidden');
 
@@ -1042,32 +1089,24 @@ async function _doHydrate(mode) {
         document.getElementById('plip-results').innerHTML = '';
         document.getElementById('plip-status').classList.add('hidden');
 
-        const label = mode === 'quick' ? 'bridging' : 'energy-scored';
         statusEl.textContent =
-            `${waterCount} ${label} water${waterCount !== 1 ? 's' : ''} placed`;
+            `${waterCount} ${meta.resultLabel} water${waterCount !== 1 ? 's' : ''} placed`;
         statusEl.className = 'star-status success';
 
-        activeBtn.textContent = mode === 'quick' ? '✓ Quick' : '✓ Full';
-        setTimeout(() => {
-            quickBtn.textContent  = '⚡ Quick';
-            fullBtn.textContent   = '🔬 Full';
-            quickBtn.disabled = false;
-            fullBtn.disabled  = false;
-        }, 3000);
+        activeBtn.textContent = meta.done;
+        setTimeout(_resetHydrateButtons, 3000);
 
     } catch (err) {
         console.error('Hydration failed:', err);
-        statusEl.textContent  = `Hydration failed: ${err.message}`;
+        statusEl.textContent = `Hydration failed: ${err.message}`;
         statusEl.className    = 'star-status error';
-        quickBtn.textContent  = '⚡ Quick';
-        fullBtn.textContent   = '🔬 Full';
-        quickBtn.disabled = false;
-        fullBtn.disabled  = false;
+        _resetHydrateButtons();
     }
 }
 
-document.getElementById('quick-hydrate-btn').addEventListener('click', () => _doHydrate('quick'));
-document.getElementById('full-hydrate-btn').addEventListener('click',  () => _doHydrate('full'));
+document.getElementById('quick-hydrate-btn').addEventListener('click',   () => _doHydrate('quick'));
+document.getElementById('full-hydrate-btn').addEventListener('click',    () => _doHydrate('full'));
+document.getElementById('biotite-hydrate-btn').addEventListener('click', () => _doHydrate('biotite'));
 
 // ----------------------------------------------------------------
 // BoltzStar - Analysis / Style tab switching

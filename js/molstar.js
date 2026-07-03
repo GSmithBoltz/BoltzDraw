@@ -353,3 +353,9 @@ function _loadMolstarScript() {
         document.head.appendChild(s);
     });
 }
+
+// Ensure the Molstar CDN bundle is loaded — lets other modules spin up
+// their own Viewer instance without duplicating the loader.
+export function ensureMolstarLoaded() {
+    return _loadMolstarScript();
+}

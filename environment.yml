@@ -16,3 +16,7 @@ dependencies:
       - meeko
       - gemmi
       - waterkit @ git+https://github.com/forlilab/waterkit.git
+      # ADME (Boltz cloud) — used by server.py /adme route. TO-CONFIRM package name/URL.
+      - boltz_api
+      # Local pKa (UnipKa) — used by server.py /pka route. TO-CONFIRM package name/URL.
+      - unipka

@@ -5,7 +5,10 @@
  * and draws the microstate population distribution chart with Chart.js.
  */
 
-const PKA_API_URL = 'https://web-production-0ede.up.railway.app/pka';
+// Local Flask route (preferred when the backend is running) and the hosted
+// Railway UnipKa service used as a fallback when it isn't.
+const PKA_LOCAL_URL = '/pka';
+const PKA_API_URL   = 'https://web-production-0ede.up.railway.app/pka';
 
 // Chart.js instance - kept so we can destroy before redrawing
 let pkaChart = null;
@@ -37,11 +40,15 @@ export function updatePkaSmiles(molecules) {
  * Trigger pKa calculation for the first molecule.
  * Wired to the Calculate pKa button in app.js.
  *
- * @param {Array} molecules - current molecule array from app state
+ * @param {Array}   molecules        - current molecule array from app state
+ * @param {boolean} backendAvailable - true when the local Flask backend is up;
+ *                                      routes to /pka locally, else Railway.
  */
-export async function calculatePka(molecules) {
+export async function calculatePka(molecules, backendAvailable = false) {
     const smiles = molecules[0]?.smiles;
     if (!smiles) return;
+
+    const url = backendAvailable ? PKA_LOCAL_URL : PKA_API_URL;
 
     const resultsDiv     = document.getElementById('pka-results');
     const chartContainer = document.getElementById('pka-chart-container');
@@ -55,7 +62,7 @@ export async function calculatePka(molecules) {
     chartContainer.classList.remove('active');
 
     try {
-        const response = await fetch(PKA_API_URL, {
+        const response = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ smiles, pH: 7.4 }),

@@ -1,0 +1,17 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Generated water self-interaction map caches (regenerated on demand)
+src/waterkit/data/water/**/water_map_cache_*.npz
+
+# Sampler / CLI output
+traj/
+*.dx

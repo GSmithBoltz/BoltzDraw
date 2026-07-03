@@ -1,0 +1,86 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "waterkit"
+version = "0.1.0"
+description = "Grid-based explicit-water sampling in protein binding sites, on Biotite."
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+authors = [
+    { name = "Charlie Harris", email = "charlie@boltz.bio" }
+]
+requires-python = ">=3.12"
+keywords = [
+    "molecular-modeling",
+    "drug-design",
+    "hydration",
+    "water",
+    "autodock",
+    "biotite",
+    "structural-biology",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "biotite>=1.7.1",
+    "hydride>=1.2.3",
+    "rdkit>=2024.3",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pandas>=2.0",
+    "typer>=0.19.2",
+    "rich>=13.0",
+    "tqdm>=4.66",
+    "jaxtyping>=0.2.36",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-xdist>=3.8.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+    "ty>=0.0.1",
+    "interrogate>=1.7.0",
+    "ipykernel>=7.1.0",
+    "pre-commit>=3.0.0",
+]
+docs = [
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.0.0",
+]
+
+[project.scripts]
+waterkit = "waterkit.cli:app"
+
+[tool.ruff]
+line-length = 100
+lint.select = ["E", "F", "I", "UP", "B", "BLE", "PL", "RUF"]
+lint.ignore = [
+    "PLR0913", "PLR0912", "PLR0915",  # many args/branches/statements expected in the sampler
+    "PLR2004",  # "magic" numbers are pervasive and meaningful in force-field/geometry code
+    "PLC0415",  # deferred imports are deliberate (avoid heavy import cost + circular imports)
+    "UP031",    # printf-style % formatting is idiomatic for fixed-width PDB/PDBQT records
+    "BLE001",   # broad except Exception used as deliberate fallbacks (faithful to upstream)
+    "B905",     # zip() without strict= (faithful to upstream loops over equal-length seqs)
+    "B007",     # unused loop variables kept for readability in ported loops
+    "F722",     # jaxtyping shape strings (e.g. Float[np.ndarray, "n 3"]) are not forward refs
+    "F821",     # jaxtyping axis names (n, nx, ...) inside shape strings are not undefined names
+    "UP037",    # must NOT de-quote jaxtyping shape strings under `from __future__ import annotations`
+]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/waterkit"]

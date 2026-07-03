@@ -1,0 +1,7 @@
+entities:
+  - type: protein
+    value: MKTIIALSYIFCLVFA
+    chain_ids: ["A"]
+  - type: ligand_smiles
+    value: CC(=O)OC1=CC=CC=C1C(=O)O
+    chain_ids: ["B"]

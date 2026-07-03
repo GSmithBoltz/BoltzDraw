@@ -49,6 +49,20 @@ _PARAM_FILE = os.path.join(
     'waterkit', 'data', 'water', 'tip3p', 'raw_data', 'AD4_parameters.dat'
 )
 
+# ----------------------------------------------------------------
+# Experimental: Biotite-edition WaterKit (vendored, own venv).
+# Runs in a separate Python (>=3.12) via subprocess because the server
+# env is 3.11. Receptor typing still needs AmberTools (wk_prepare_receptor
+# --amber_pdbqt), so we reuse the binaries already in this env.
+# ----------------------------------------------------------------
+_BIOTITE_DIR    = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'vendor', 'waterkit-biotite')
+_BIOTITE_PY     = os.path.join(_BIOTITE_DIR, '.venv', 'bin', 'python')
+_BIOTITE_RUNNER = os.path.join(_BIOTITE_DIR, 'boltz_runner.py')
+_BIOTITE_CACHE  = os.path.join(_BIOTITE_DIR, '.sw_cache')
+_WK_PREPARE     = os.path.join(_ENV, 'bin', 'wk_prepare_receptor.py')
+_BIOTITE_PAD    = 20.0   # Å padding around the ligand extent (matches Full)
+
 
 # ----------------------------------------------------------------
 # Public entry point
@@ -62,7 +76,8 @@ def run_pipeline(input_data: str, input_format: str, mode: str = 'full'):
     ----------
     input_data   : CIF or PDB file content as a UTF-8 string
     input_format : 'mmcif' or 'pdb'
-    mode         : 'quick' (geometric) | 'full' (WaterKit)
+    mode         : 'quick' (geometric) | 'full' (WaterKit) |
+                   'biotite' (experimental Biotite-edition WaterKit)
 
     Returns
     -------
@@ -70,6 +85,8 @@ def run_pipeline(input_data: str, input_format: str, mode: str = 'full'):
     """
     if mode == 'quick':
         return run_quick_pipeline(input_data, input_format)
+    if mode == 'biotite':
+        return run_biotite_pipeline(input_data, input_format)
     return run_waterkit_pipeline(input_data, input_format)
 
 
@@ -253,6 +270,143 @@ def run_waterkit_pipeline(input_data: str, input_format: str):
         return _run_waterkit(input_data, input_format, workdir)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+# ----------------------------------------------------------------
+# Experimental — Biotite-edition WaterKit
+# ----------------------------------------------------------------
+
+def run_biotite_pipeline(input_data: str, input_format: str):
+    """Experimental hydration via the Biotite-edition WaterKit rewrite.
+
+    Same shape as the Full pipeline, but the energy-grid + water-sampling
+    engine is the pip-installable Biotite port (no OpenBabel, no patched
+    AutoGrid binary). It runs in its own vendored venv via subprocess.
+
+    Receptor atom typing still needs Amber ff14SB types, so we prepare the
+    receptor with AmberTools (wk_prepare_receptor --amber_pdbqt) — the engine's
+    own prepare-receptor emits incompatible AutoDock types. The SW-map
+    transpose bug (non-cubic boxes) is patched in the vendored source.
+    """
+    if not os.path.exists(_BIOTITE_PY):
+        raise RuntimeError(
+            'Biotite WaterKit is not set up. Expected a venv at '
+            f'{_BIOTITE_PY}. Build it with:\n'
+            f'  cd {_BIOTITE_DIR} && uv venv --python 3.13 .venv && '
+            f'uv pip install --python .venv/bin/python -e .'
+        )
+
+    workdir = tempfile.mkdtemp(prefix='boltzstar_biotite_')
+    try:
+        return _run_biotite(input_data, input_format, workdir)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _run_biotite(input_data, input_format, workdir):
+    import json
+    from pdbfixer import PDBFixer
+    from openmm.app import PDBFile
+
+    # Stage 1: PDBFixer (same prep as Full)
+    suffix = '.cif' if input_format == 'mmcif' else '.pdb'
+    input_path = os.path.join(workdir, 'input' + suffix)
+    with open(input_path, 'w', encoding='utf-8') as fh:
+        fh.write(input_data)
+
+    fixer = PDBFixer(filename=input_path)
+    fixer.findMissingResidues()
+    fixer.findNonstandardResidues()
+    fixer.replaceNonstandardResidues()
+    fixer.findMissingAtoms()
+    fixer.addMissingAtoms()
+    fixer.addMissingHydrogens(7.4)
+
+    fixed_pdb = os.path.join(workdir, 'fixed.pdb')
+    with open(fixed_pdb, 'w') as fh:
+        PDBFile.writeFile(fixer.topology, fixer.positions, fh)
+
+    # Stage 2: split protein / ligand, derive grid box from the ligand
+    protein_pdb, ligand_pdb, lig_centroid, lig_extent = _split_protein_ligand(
+        fixed_pdb, workdir
+    )
+    box_size = lig_extent + _BIOTITE_PAD
+
+    # Stage 3: Amber-typed receptor via AmberTools (works around the engine's
+    # incompatible prepare-receptor). tleap lives in this env's bin.
+    receptor_pdbqt = _amber_receptor(protein_pdb, workdir)
+
+    # Stage 4: run the Biotite engine in its own venv
+    out_dir = os.path.join(workdir, 'waters')
+    os.makedirs(out_dir, exist_ok=True)
+    config = {
+        'receptor':        receptor_pdbqt,
+        'center':          lig_centroid.tolist(),
+        'size':            box_size.tolist(),
+        'out_dir':         out_dir,
+        'water_model':     'tip3p',
+        'temperature':     300.0,
+        'n_layers':        3,
+        'sw_orientations': 2000,
+        'n_jobs':          -1,
+        'cache_dir':       _BIOTITE_CACHE,
+    }
+    config_path = os.path.join(workdir, 'config.json')
+    with open(config_path, 'w') as fh:
+        json.dump(config, fh)
+
+    result = subprocess.run(
+        [_BIOTITE_PY, _BIOTITE_RUNNER, config_path],
+        capture_output=True, text=True, cwd=_BIOTITE_DIR,
+    )
+    water_frame = os.path.join(out_dir, 'water_000001.pdb')
+    if result.returncode != 0 or not os.path.exists(water_frame):
+        tail = (result.stderr or result.stdout or '')[-1500:]
+        raise RuntimeError(f'Biotite WaterKit failed:\n{tail}')
+
+    # Stage 5: merge — clash-filter vs ligand, strip TIP3P hydrogens, append.
+    # (Same post-processing as the Full pipeline so the viewer behaves alike.)
+    pdb_buf = io.StringIO()
+    PDBFile.writeFile(fixer.topology, fixer.positions, pdb_buf)
+    fixed_str = pdb_buf.getvalue()
+
+    water_str = open(water_frame).read()
+    water_lines = _filter_water_clashes(water_str, ligand_pdb, clash_dist=2.0)
+    water_lines = [l for l in water_lines
+                   if not ('HOH' in l[17:20]
+                           and l[12:16].strip().startswith('H'))]
+
+    n_waters = sum(1 for l in water_lines if '  O   HOH' in l)
+
+    fixed_lines = [l for l in fixed_str.splitlines(keepends=True)
+                   if not l.startswith('END')]
+    output = ''.join(fixed_lines) + ''.join(water_lines) + 'END\n'
+    return output, n_waters
+
+
+def _amber_receptor(protein_pdb, workdir):
+    """Amber ff14SB-typed receptor PDBQT via wk_prepare_receptor (AmberTools)."""
+    if not os.path.exists(_WK_PREPARE):
+        raise RuntimeError(
+            f'wk_prepare_receptor.py not found at {_WK_PREPARE}. '
+            'The Biotite engine needs an Amber-typed receptor.'
+        )
+
+    prefix = os.path.join(workdir, 'amber_receptor')
+    env = dict(os.environ)
+    env['PATH']      = os.path.join(_ENV, 'bin') + os.pathsep + env.get('PATH', '')
+    env['AMBERHOME'] = _ENV
+
+    result = subprocess.run(
+        [_sys.executable, _WK_PREPARE, '-i', protein_pdb, '-o', prefix,
+         '--amber_pdbqt', '--ignore_gaps'],
+        capture_output=True, text=True, env=env,
+    )
+    receptor_pdbqt = prefix + '_amber.pdbqt'
+    if result.returncode != 0 or not os.path.exists(receptor_pdbqt):
+        tail = (result.stderr or result.stdout or '')[-1500:]
+        raise RuntimeError(f'AmberTools receptor prep failed:\n{tail}')
+    return receptor_pdbqt
 
 
 # ----------------------------------------------------------------
