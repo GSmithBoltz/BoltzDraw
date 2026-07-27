@@ -201,6 +201,13 @@ const MODES = {
         containerId: 'boltzplot-container',
         btnId:       'btn-plot',
     },
+    table: {
+        subtitle:    'Structure Table Viewer',
+        panelTitle:  'Table',
+        btnClass:    'active-table',
+        containerId: 'boltztable-container',
+        btnId:       'btn-table',
+    },
 };
 
 let currentMode       = 'draw';
@@ -209,6 +216,7 @@ let buildView         = 'peptide'; // 'peptide' | 'pdb'
 let molstarInitted    = false;
 let boltzSpaceInitted = false;
 let boltzPlotInitted  = false;
+let boltzTableInitted = false;
 
 async function switchMode(mode) {
     if (mode === currentMode) return;
@@ -228,7 +236,7 @@ async function switchMode(mode) {
     });
 
     // Hide shared properties panel in modes that have their own right panel
-    const hidePanel = mode === 'space' || mode === 'plot';
+    const hidePanel = mode === 'space' || mode === 'plot' || mode === 'table';
     document.getElementById('properties-panel').classList.toggle('hidden', hidePanel);
     document.getElementById('panel-toggle').classList.toggle('hidden', hidePanel);
 
@@ -279,6 +287,17 @@ async function switchMode(mode) {
         }
     }
 
+    // Lazy-init BoltzTable on first switch
+    if (mode === 'table' && !boltzTableInitted) {
+        boltzTableInitted = true;
+        try {
+            const { initBoltzTable } = await import('./boltztable.js');
+            await initBoltzTable(RDKit, { onSendTo: sendCsvToMode });
+        } catch (err) {
+            console.error('BoltzTable init failed:', err);
+        }
+    }
+
     // Lazy-init Molstar on first switch to BoltzStar
     if (mode === 'star' && !molstarInitted) {
         molstarInitted = true;
@@ -293,10 +312,28 @@ async function switchMode(mode) {
     }
 }
 
+/**
+ * Hand a CSV string produced by one mode to another mode's uploader.
+ * Switching first guarantees the target module is lazy-inited (and its CDN
+ * scripts loaded) before we push data at it.
+ */
+async function sendCsvToMode(mode, csvText, filename = 'boltztable-subset.csv') {
+    const file = new File([csvText], filename, { type: 'text/csv' });
+    await switchMode(mode);
+    if (mode === 'space') {
+        const { handleCsvUpload } = await import('./boltzspace.js');
+        handleCsvUpload(file);
+    } else if (mode === 'plot') {
+        const { loadCsvFile } = await import('./boltzplot.js');
+        loadCsvFile(file);
+    }
+}
+
 document.getElementById('btn-draw').addEventListener('click',  () => switchMode('draw'));
 document.getElementById('btn-star').addEventListener('click',  () => switchMode('star'));
 document.getElementById('btn-space').addEventListener('click', () => switchMode('space'));
 document.getElementById('btn-plot').addEventListener('click',  () => switchMode('plot'));
+document.getElementById('btn-table').addEventListener('click', () => switchMode('table'));
 
 
 

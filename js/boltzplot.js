@@ -99,6 +99,11 @@ function _renderEmptyState() {
 // File upload
 // ================================================================
 
+/** Load a File/Blob from another mode (e.g. a filtered subset from BoltzTable). */
+export function loadCsvFile(file) {
+    _handleFile(file);
+}
+
 function _handleFile(file) {
     _setStatus('Parsing…', 'loading');
     _data = []; _cols = [];

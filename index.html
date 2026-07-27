@@ -13,6 +13,7 @@
     <link rel="stylesheet" href="css/styles.css">
     <link rel="stylesheet" href="css/boltzspace.css">
     <link rel="stylesheet" href="css/boltzplot.css">
+    <link rel="stylesheet" href="css/boltztable.css">
 </head>
 <body>
 
@@ -37,6 +38,9 @@
             </button>
             <button class="mode-btn" id="btn-plot">
                 <span class="btn-brand">Boltz</span><span class="btn-product">Plot</span>
+            </button>
+            <button class="mode-btn" id="btn-table">
+                <span class="btn-brand">Boltz</span><span class="btn-product">Table</span>
             </button>
         </nav>
         <div class="header-divider"></div>
@@ -357,6 +361,204 @@
                               placeholder="Paste IDs or SMILES, one per line"></textarea>
                     <button class="star-load-btn" id="bp-apply-highlight-btn">Apply</button>
                     <div class="star-status hidden" id="bp-highlight-status"></div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- BoltzTable: DataWarrior-style structure table -->
+        <div id="boltztable-container" class="hidden">
+
+            <div id="bt-main">
+
+                <!-- Toolbar: row counts, quick search, row height, export -->
+                <div id="bt-toolbar" class="hidden">
+                    <div id="bt-counts">
+                        <span id="bt-count-visible">0</span>
+                        <span class="bt-count-sep">of</span>
+                        <span id="bt-count-total">0</span>
+                        <span class="bt-count-label">rows</span>
+                        <span id="bt-count-selected" class="hidden"></span>
+                    </div>
+
+                    <input type="text" id="bt-search" class="bt-search"
+                           placeholder="Search all columns…" autocomplete="off">
+
+                    <div class="bt-toolbar-group">
+                        <span class="bt-toolbar-label">Rows</span>
+                        <div class="bt-seg" id="bt-rowheight">
+                            <button class="bt-seg-btn" data-h="28">S</button>
+                            <button class="bt-seg-btn active" data-h="72">M</button>
+                            <button class="bt-seg-btn" data-h="120">L</button>
+                        </div>
+                    </div>
+
+                    <div class="bt-toolbar-spacer"></div>
+
+                    <button class="bt-tool-btn" id="bt-clear-sel-btn">Clear selection</button>
+                    <div class="bt-menu-wrap">
+                        <button class="bt-tool-btn bt-tool-btn-primary" id="bt-export-btn">Export ▾</button>
+                        <div class="bt-menu hidden" id="bt-export-menu">
+                            <button data-act="csv-filtered">Download filtered CSV</button>
+                            <button data-act="csv-selected">Download selected CSV</button>
+                            <button data-act="copy-smiles">Copy SMILES (filtered)</button>
+                            <button data-act="copy-ids">Copy IDs (filtered)</button>
+                            <div class="bt-menu-sep"></div>
+                            <button data-act="send-space">Open filtered in BoltzSpace</button>
+                            <button data-act="send-plot">Open filtered in BoltzPlot</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="bt-empty-state"></div>
+
+                <!-- Virtualized table -->
+                <div id="bt-table-wrap" class="hidden">
+                    <div id="bt-scroll">
+                        <div id="bt-header-row"></div>
+                        <div id="bt-rows"></div>
+                    </div>
+                    <div id="bt-no-match" class="hidden">
+                        <p>No rows match the current filters.</p>
+                        <button class="bt-tool-btn" id="bt-reset-from-empty">Reset all filters</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="bt-panel">
+
+                <div class="panel-header">
+                    <div class="panel-header-left">
+                        <span>Table</span>
+                    </div>
+                </div>
+
+                <div class="star-section" id="bt-upload-section">
+                    <label class="star-label">Data</label>
+                    <label class="star-upload-label" for="bt-file-input">
+                        Upload CSV or TSV file
+                    </label>
+                    <input type="file" id="bt-file-input" accept=".csv,.tsv,.txt" style="display:none">
+                    <div class="star-status hidden" id="bt-status"></div>
+
+                    <div id="bt-structure-config" class="hidden">
+                        <label class="star-label">Structure column</label>
+                        <select id="bt-smiles-col" class="space-select"></select>
+                        <label class="star-label">ID column</label>
+                        <select id="bt-id-col" class="space-select"></select>
+                    </div>
+                </div>
+
+                <!-- Panel tabs -->
+                <div id="bt-panel-tabs" class="hidden">
+                    <button class="bt-panel-tab active" data-tab="filters">Filters</button>
+                    <button class="bt-panel-tab" data-tab="analysis">Analysis</button>
+                    <button class="bt-panel-tab" data-tab="columns">Columns</button>
+                    <button class="bt-panel-tab" data-tab="record">Record</button>
+                </div>
+
+                <!-- Filters tab -->
+                <div id="bt-tab-filters" class="bt-tab-body hidden">
+                    <div class="bt-filter-head">
+                        <span id="bt-active-filter-count">No active filters</span>
+                        <button class="bt-link-btn" id="bt-reset-filters">Reset all</button>
+                    </div>
+                    <div id="bt-structure-filters"></div>
+                    <div id="bt-column-filters"></div>
+                </div>
+
+                <!-- Analysis tab -->
+                <div id="bt-tab-analysis" class="bt-tab-body hidden">
+
+                    <!-- Shared metric block, used by both analyses below -->
+                    <div class="bt-an-metric">
+                        <div class="bt-an-metric-row">
+                            <label class="bt-an-mini-label">Fingerprint</label>
+                            <select id="bt-an-fp" class="space-select bt-an-select">
+                                <option value="morgan">ECFP4 (Morgan r=2)</option>
+                                <option value="rdkit">RDKit topological</option>
+                                <option value="atompair">Atom pairs</option>
+                                <option value="torsion">Topological torsions</option>
+                                <option value="maccs">MACCS keys</option>
+                            </select>
+                        </div>
+                        <div class="bt-an-metric-row">
+                            <label class="bt-an-mini-label">Coefficient</label>
+                            <select id="bt-an-coeff" class="space-select bt-an-select">
+                                <option value="tanimoto">Tanimoto</option>
+                                <option value="dice">Dice</option>
+                                <option value="cosine">Cosine</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- 1. Nearest neighbours to a query SMILES -->
+                    <div class="bt-an-section">
+                        <div class="bt-an-head">
+                            <span class="bt-an-title">Nearest neighbours</span>
+                            <button class="bt-link-btn" id="bt-nn-use-record">Use record</button>
+                        </div>
+                        <p class="bt-an-hint">Find the molecules in this table closest to a query structure.</p>
+                        <input type="text" id="bt-nn-query" class="bt-text-in" placeholder="query SMILES">
+                        <div class="bt-an-run-row">
+                            <label class="bt-an-mini-label">Top</label>
+                            <input type="number" id="bt-nn-topn" class="bt-num-in" value="5" min="1" max="50">
+                            <label class="bt-nn-scope">
+                                <input type="checkbox" id="bt-nn-filtered" checked>
+                                <span>filtered rows only</span>
+                            </label>
+                        </div>
+                        <button class="star-apply-btn bt-an-btn" id="bt-nn-run">Search</button>
+                        <div class="bt-an-status hidden" id="bt-nn-status"></div>
+                        <div id="bt-nn-results"></div>
+                        <button class="bt-tool-btn bt-an-wide-btn hidden" id="bt-nn-select">Select these rows</button>
+                    </div>
+
+                    <!-- 2. Cross-file nearest match -->
+                    <div class="bt-an-section">
+                        <div class="bt-an-head">
+                            <span class="bt-an-title">Compare with a second file</span>
+                        </div>
+                        <p class="bt-an-hint">For every row, find its most similar molecule in a reference
+                           set. The result is written back as sortable, filterable columns.</p>
+                        <label class="star-upload-label bt-an-upload" for="bt-ref-file-input">
+                            Upload reference CSV / TSV
+                        </label>
+                        <input type="file" id="bt-ref-file-input" accept=".csv,.tsv,.txt" style="display:none">
+                        <div class="bt-an-status hidden" id="bt-ref-status"></div>
+
+                        <div id="bt-ref-config" class="hidden">
+                            <label class="bt-an-mini-label">Reference structure column</label>
+                            <select id="bt-ref-smiles-col" class="space-select bt-an-select"></select>
+                            <label class="bt-an-mini-label">Reference label column</label>
+                            <select id="bt-ref-id-col" class="space-select bt-an-select"></select>
+                            <label class="bt-nn-scope bt-ref-scope">
+                                <input type="checkbox" id="bt-ref-filtered" checked>
+                                <span>match filtered rows only</span>
+                            </label>
+                            <button class="star-apply-btn bt-an-btn" id="bt-ref-run">Find nearest matches</button>
+                            <div class="bt-progress hidden" id="bt-ref-progress">
+                                <div class="bt-progress-bar" id="bt-ref-progress-bar"></div>
+                            </div>
+                            <div id="bt-ref-summary"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Columns tab -->
+                <div id="bt-tab-columns" class="bt-tab-body hidden">
+                    <div class="bt-filter-head">
+                        <span id="bt-visible-col-count"></span>
+                        <button class="bt-link-btn" id="bt-show-all-cols">Show all</button>
+                    </div>
+                    <div id="bt-column-list"></div>
+                </div>
+
+                <!-- Record tab -->
+                <div id="bt-tab-record" class="bt-tab-body hidden">
+                    <div id="bt-record-body">
+                        <p class="bt-record-empty">Click a row to inspect the record.</p>
+                    </div>
                 </div>
 
             </div>

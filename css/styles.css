@@ -183,6 +183,14 @@ body {
 .mode-btn.active-plot .btn-brand,
 .mode-btn.active-plot .btn-product { color: white; }
 
+/* Active BoltzTable - deep teal pill, white text */
+.mode-btn.active-table {
+    background: #2f6f6a;
+    color: white;
+}
+.mode-btn.active-table .btn-brand,
+.mode-btn.active-table .btn-product { color: white; }
+
 .header-divider {
     width: 1px;
     height: 18px;
