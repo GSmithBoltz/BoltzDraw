@@ -37,10 +37,13 @@ let lastClickedRow = null;       // anchor for shift-click range selection
 
 let filters = new Map();         // colName -> filter state
 
-// Draw-only columns: colName -> the column holding the SMILES to draw. They
-// carry no data of their own, so they are skipped by filters and by export —
-// the source column is the one that actually travels.
+// Columns drawn as structures: colName -> the column holding the SMILES.
+// A column mapped to itself (the primary structure column) owns its SMILES and
+// exports normally; one mapped to a different source is draw-only, carrying no
+// data of its own, and is skipped by filters and by export.
 const renderCols = new Map();
+
+let originalColOrder = [];       // file order, so a mangled layout can be reset
 let structFilter = {
     smarts: '', qmol: null, qmolErr: '',
     simSmiles: '', simFp: null, simCutoff: 0.7, simErr: '',
@@ -103,7 +106,7 @@ function _wireListeners() {
         .addEventListener('change', e => { if (e.target.files[0]) _handleFile(e.target.files[0]); });
 
     document.getElementById('bt-smiles-col').addEventListener('change', e => {
-        smilesCol = e.target.value;
+        _setStructureColumn(e.target.value);
         svgCache.clear(); fpCaches.clear(); substructCache.clear();
         fpsReady = false;
         _buildStructureFilters();
@@ -173,7 +176,19 @@ function _wireListeners() {
     new ResizeObserver(_queueRender).observe(scroll);
 
     document.getElementById('bt-rows').addEventListener('click', _onRowClick);
-    document.getElementById('bt-header-row').addEventListener('click', _onHeaderClick);
+    const head = document.getElementById('bt-header-row');
+    head.addEventListener('click', _onHeaderClick);
+
+    // Both containers outlive their contents, so these bind exactly once —
+    // wiring them inside the rebuilds would stack a handler per redraw.
+    _wireColumnDrag(head, 'x', _afterReorder);
+    _wireColumnDrag(document.getElementById('bt-column-list'), 'y', _afterReorder);
+
+    document.getElementById('bt-reset-order').addEventListener('click', () => {
+        colNames = originalColOrder.filter(c => colNames.includes(c))
+            .concat(colNames.filter(c => !originalColOrder.includes(c)));
+        _afterReorder();
+    });
 
     _wireAnalysis();
 }
@@ -214,6 +229,7 @@ function _handleFile(file) {
                 return;
             }
 
+            originalColOrder = colNames.slice();
             _typeColumns();
             _populateSelects();
             _autoDetect();
@@ -423,6 +439,7 @@ function _autoDetect() {
         }
     }
 
+    _setStructureColumn(smilesCol);
     document.getElementById('bt-smiles-col').value = smilesCol;
     document.getElementById('bt-id-col').value     = idCol;
 }
@@ -1003,14 +1020,43 @@ function _updateCounts() {
 // ----------------------------------------------------------------
 
 function _shownCols() {
-    return colNames.filter(c => !hiddenCols.has(c) && c !== smilesCol);
+    return colNames.filter(c => !hiddenCols.has(c));
+}
+
+/** True for columns that only draw another column's SMILES and hold no data. */
+function _isDrawOnly(c) {
+    return renderCols.has(c) && renderCols.get(c) !== c;
+}
+
+/** Point the primary structure column at `name`, drawing it in place. */
+function _setStructureColumn(name) {
+    for (const [k, v] of renderCols) if (k === v) renderCols.delete(k);
+    smilesCol = name;
+    if (name) renderCols.set(name, name);
+}
+
+/** Move `name` so it sits immediately before `beforeName` (or last if null). */
+function _reorderColumn(name, beforeName) {
+    const from = colNames.indexOf(name);
+    if (from === -1 || name === beforeName) return false;
+    colNames.splice(from, 1);
+    const at = beforeName === null ? colNames.length : colNames.indexOf(beforeName);
+    colNames.splice(at === -1 ? colNames.length : at, 0, name);
+    return true;
+}
+
+function _afterReorder() {
+    _buildColumnList();
+    _renderFilterCards();
+    _rebuildHeader();
+    _renderRows();
+    _renderRecord();
 }
 
 function _structWidth() { return Math.max(84, Math.round(rowHeight * 1.75)); }
 
 function _gridTemplate() {
     const parts = [`${CHECK_W}px`];
-    if (smilesCol) parts.push(`${_structWidth()}px`);
     for (const c of _shownCols()) {
         if (renderCols.has(c)) { parts.push(`${_structWidth()}px`); continue; }
         const meta = colMeta.get(c);
@@ -1029,19 +1075,20 @@ function _rebuildHeader() {
     let html = `<div class="bt-th bt-th-check">
         <input type="checkbox" id="bt-select-all" title="Select all filtered rows">
     </div>`;
-    if (smilesCol) html += `<div class="bt-th bt-th-struct">Structure</div>`;
     html += _shownCols().map(c => {
-        // Draw-only columns have nothing to sort or filter on — sort the
-        // matching ID column instead, which groups them identically.
+        // Structure columns aren't sortable — the picture has no useful order.
+        // Sorting the matching ID column groups them identically.
         if (renderCols.has(c)) {
-            return `<div class="bt-th bt-th-struct" title="${_esc(c)}">
+            return `<div class="bt-th bt-th-struct" data-col="${_esc(c)}" draggable="true"
+                         title="${_esc(c)} — drag to reorder">
                 <span class="bt-th-label">${_esc(c)}</span>
             </div>`;
         }
         const meta = colMeta.get(c);
         const f = filters.get(c);
         return `<div class="bt-th ${meta.type === 'number' ? 'num' : ''} ${sortCol === c ? 'sorted' : ''}"
-                     data-col="${_esc(c)}" title="${_esc(c)}">
+                     data-col="${_esc(c)}" draggable="true"
+                     title="${_esc(c)} — click to sort, drag to reorder">
             <span class="bt-th-label">${_esc(c)}</span>
             <span class="bt-th-dot ${f && f.active ? '' : 'off'}"></span>
             <span class="bt-th-arrow">${arrow(c)}</span>
@@ -1077,12 +1124,79 @@ function _onHeaderClick(e) {
     const th = e.target.closest('.bt-th[data-col]');
     if (!th) return;
     const col = th.dataset.col;
+    if (renderCols.has(col)) return;   // a drawing has no meaningful order
     if (sortCol !== col)      { sortCol = col; sortDir = 1; }
     else if (sortDir === 1)   { sortDir = -1; }
     else                      { sortCol = null; sortDir = 1; }
     _applySort();
     _rebuildHeader();
     _renderRows();
+}
+
+// ----------------------------------------------------------------
+// Column reordering — drag a header, or drag a row in the Columns tab
+// ----------------------------------------------------------------
+
+let _dragCol = null;
+
+/**
+ * Wire drag-to-reorder onto a container of elements carrying data-col.
+ * `axis` decides which half of an element counts as "insert before":
+ * horizontal for table headers, vertical for the Columns tab list.
+ */
+function _wireColumnDrag(host, axis, onDrop) {
+    host.addEventListener('dragstart', e => {
+        const el = e.target.closest('[data-col]');
+        if (!el) return;
+        _dragCol = el.dataset.col;
+        el.classList.add('bt-dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        // Firefox refuses to start a drag without payload.
+        try { e.dataTransfer.setData('text/plain', _dragCol); } catch {}
+    });
+
+    host.addEventListener('dragend', () => {
+        _dragCol = null;
+        host.querySelectorAll('.bt-dragging, .bt-drop-before, .bt-drop-after')
+            .forEach(n => n.classList.remove('bt-dragging', 'bt-drop-before', 'bt-drop-after'));
+    });
+
+    host.addEventListener('dragover', e => {
+        if (_dragCol === null) return;
+        const el = e.target.closest('[data-col]');
+        if (!el) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        host.querySelectorAll('.bt-drop-before, .bt-drop-after')
+            .forEach(n => n.classList.remove('bt-drop-before', 'bt-drop-after'));
+        if (el.dataset.col === _dragCol) return;
+        el.classList.add(_isBefore(e, el, axis) ? 'bt-drop-before' : 'bt-drop-after');
+    });
+
+    host.addEventListener('drop', e => {
+        if (_dragCol === null) return;
+        const el = e.target.closest('[data-col]');
+        if (!el || el.dataset.col === _dragCol) return;
+        e.preventDefault();
+
+        const target = el.dataset.col;
+        let before;
+        if (_isBefore(e, el, axis)) {
+            before = target;
+        } else {
+            // Drop after `target` — insert before whatever currently follows it.
+            const i = colNames.indexOf(target);
+            before = i === -1 || i + 1 >= colNames.length ? null : colNames[i + 1];
+        }
+        if (_reorderColumn(_dragCol, before)) onDrop();
+    });
+}
+
+function _isBefore(e, el, axis) {
+    const r = el.getBoundingClientRect();
+    return axis === 'x'
+        ? e.clientX < r.left + r.width / 2
+        : e.clientY < r.top + r.height / 2;
 }
 
 function _queueRender() {
@@ -1133,16 +1247,15 @@ function _rowHtml(idx, shown, tpl) {
         <input type="checkbox" data-check="${idx}" ${isSel ? 'checked' : ''}>
     </div>`;
 
-    if (smilesCol) {
-        const smi = String(row[smilesCol] ?? '');
-        cells += `<div class="bt-td bt-td-struct">${_structureSvg(idx, smi)}</div>`;
-    }
-
     for (const c of shown) {
         if (renderCols.has(c)) {
             const src = String(row[renderCols.get(c)] ?? '');
-            cells += `<div class="bt-td bt-td-struct" title="${_esc(src)}">
-                ${_drawSvg(src, _structWidth() - 6, rowHeight - 6)}</div>`;
+            // The row's own structure carries any active substructure highlight;
+            // a matched reference structure is drawn plain.
+            const svg = c === smilesCol
+                ? _structureSvg(idx, src)
+                : _drawSvg(src, _structWidth() - 6, rowHeight - 6);
+            cells += `<div class="bt-td bt-td-struct" title="${_esc(src)}">${svg}</div>`;
             continue;
         }
         const meta = colMeta.get(c);
@@ -1233,22 +1346,27 @@ function _setPanelTab(tab) {
 
 function _buildColumnList() {
     const host = document.getElementById('bt-column-list');
-    host.innerHTML = colNames.map(c => `
-        <label class="bt-col-row">
-            <input type="checkbox" data-col="${_esc(c)}" ${hiddenCols.has(c) ? '' : 'checked'}>
-            <span class="bt-col-name" title="${_esc(c)}">${_esc(c)}</span>
+    // Checkbox ids are index-based: column names carry spaces and punctuation
+    // that would make an invalid id and break the label's `for` pairing.
+    host.innerHTML = colNames.map((c, i) => `
+        <div class="bt-col-row" data-col="${_esc(c)}" draggable="true">
+            <span class="bt-col-grip" title="Drag to reorder">⠿</span>
+            <input type="checkbox" id="bt-colcb-${i}" ${hiddenCols.has(c) ? '' : 'checked'}>
+            <label class="bt-col-name" for="bt-colcb-${i}" title="${_esc(c)}">${_esc(c)}</label>
             <span class="bt-col-type">${colMeta.get(c).type}</span>
-        </label>`).join('');
+        </div>`).join('');
 
-    host.querySelectorAll('input[data-col]').forEach(cb => {
+    host.querySelectorAll('.bt-col-row').forEach(row => {
+        const cb = row.querySelector('input');
         cb.addEventListener('change', () => {
-            if (cb.checked) hiddenCols.delete(cb.dataset.col);
-            else            hiddenCols.add(cb.dataset.col);
+            if (cb.checked) hiddenCols.delete(row.dataset.col);
+            else            hiddenCols.add(row.dataset.col);
             _updateColCount();
             _rebuildHeader();
             _renderRows();
         });
     });
+
     _updateColCount();
 }
 
@@ -1305,7 +1423,7 @@ function _renderRecord() {
 
     // Draw-only columns hold no value of their own — the structure they render
     // is already shown above, so listing them here would just be a blank row.
-    const fields = colNames.filter(c => !renderCols.has(c)).map(c => `
+    const fields = colNames.filter(c => !_isDrawOnly(c)).map(c => `
         <div class="bt-rec-field">
             <span class="bt-rec-key" title="${_esc(c)}">${_esc(c)}</span>
             <span class="bt-rec-val" title="${_esc(String(row[c] ?? ''))}">${_esc(String(row[c] ?? '—'))}</span>
@@ -1765,7 +1883,7 @@ function _runExport(act) {
 }
 
 function _toCsv(idxs) {
-    const cols = colNames.filter(c => !renderCols.has(c));   // draw-only, no data
+    const cols = colNames.filter(c => !_isDrawOnly(c));   // draw-only cols hold no data
     const esc = v => {
         const s = v === undefined || v === null ? '' : String(v);
         return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
