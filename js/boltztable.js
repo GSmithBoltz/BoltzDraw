@@ -36,6 +36,11 @@ let panelTab = 'filters';
 let lastClickedRow = null;       // anchor for shift-click range selection
 
 let filters = new Map();         // colName -> filter state
+
+// Draw-only columns: colName -> the column holding the SMILES to draw. They
+// carry no data of their own, so they are skipped by filters and by export —
+// the source column is the one that actually travels.
+const renderCols = new Map();
 let structFilter = {
     smarts: '', qmol: null, qmolErr: '',
     simSmiles: '', simFp: null, simCutoff: 0.7, simErr: '',
@@ -233,7 +238,7 @@ function _handleFile(file) {
 
 function _resetAll() {
     rows = []; colNames = []; colMeta.clear();
-    hiddenCols.clear(); filters.clear();
+    hiddenCols.clear(); filters.clear(); renderCols.clear();
     filtered = []; order = []; selected.clear();
     activeRow = null; lastClickedRow = null;
     sortCol = null; sortDir = 1;
@@ -315,7 +320,7 @@ function _typeOneColumn(name) {
  * filters and exports like anything that came out of the file. Re-running an
  * analysis overwrites in place rather than piling up duplicate columns.
  */
-function _addComputedColumn(name, valueByRowIdx) {
+function _addComputedColumn(name, valueByRowIdx, { filterable = true } = {}) {
     for (let i = 0; i < rows.length; i++) {
         const v = valueByRowIdx.get(i);
         rows[i][name] = v === undefined || v === null ? '' : v;
@@ -324,10 +329,24 @@ function _addComputedColumn(name, valueByRowIdx) {
 
     _typeOneColumn(name);
 
+    if (!filterable) { filters.delete(name); return; }
+
     const meta = colMeta.get(name);
     if (meta.type === 'number')        filters.set(name, { type: 'number', lo: meta.min, hi: meta.max, active: false });
     else if (meta.type === 'category') filters.set(name, { type: 'category', excluded: new Set(), active: false });
     else                               filters.set(name, { type: 'text', q: '', active: false });
+}
+
+/**
+ * Add a column that draws the structure held as SMILES in `sourceCol`. It owns
+ * no data, so it is excluded from filters and from exported CSV — the source
+ * column carries the SMILES that actually needs to travel.
+ */
+function _addRenderColumn(name, sourceCol) {
+    if (!colNames.includes(name)) colNames.push(name);
+    renderCols.set(name, sourceCol);
+    colMeta.set(name, { type: 'structure', n: 0 });
+    filters.delete(name);
 }
 
 function _isNum(s) {
@@ -417,7 +436,10 @@ function _buildFilters() {
 
 function _renderFilterCards() {
     const host = document.getElementById('bt-column-filters');
-    host.innerHTML = colNames.map(name => _filterCardHtml(name)).join('');
+    // Only columns that actually own a filter — draw-only and opt-out columns
+    // have no state to bind, and wiring them would throw on first input.
+    host.innerHTML = colNames.filter(n => filters.has(n))
+        .map(name => _filterCardHtml(name)).join('');
     _wireFilterCards(host);
 }
 
@@ -969,6 +991,7 @@ function _gridTemplate() {
     const parts = [`${CHECK_W}px`];
     if (smilesCol) parts.push(`${_structWidth()}px`);
     for (const c of _shownCols()) {
+        if (renderCols.has(c)) { parts.push(`${_structWidth()}px`); continue; }
         const meta = colMeta.get(c);
         parts.push(meta.type === 'number' ? '104px' : 'minmax(120px, 200px)');
     }
@@ -987,6 +1010,13 @@ function _rebuildHeader() {
     </div>`;
     if (smilesCol) html += `<div class="bt-th bt-th-struct">Structure</div>`;
     html += _shownCols().map(c => {
+        // Draw-only columns have nothing to sort or filter on — sort the
+        // matching ID column instead, which groups them identically.
+        if (renderCols.has(c)) {
+            return `<div class="bt-th bt-th-struct" title="${_esc(c)}">
+                <span class="bt-th-label">${_esc(c)}</span>
+            </div>`;
+        }
         const meta = colMeta.get(c);
         const f = filters.get(c);
         return `<div class="bt-th ${meta.type === 'number' ? 'num' : ''} ${sortCol === c ? 'sorted' : ''}"
@@ -1088,6 +1118,12 @@ function _rowHtml(idx, shown, tpl) {
     }
 
     for (const c of shown) {
+        if (renderCols.has(c)) {
+            const src = String(row[renderCols.get(c)] ?? '');
+            cells += `<div class="bt-td bt-td-struct" title="${_esc(src)}">
+                ${_drawSvg(src, _structWidth() - 6, rowHeight - 6)}</div>`;
+            continue;
+        }
         const meta = colMeta.get(c);
         const raw  = row[c];
         const txt  = raw === undefined || raw === null ? '' : String(raw);
@@ -1100,12 +1136,15 @@ function _rowHtml(idx, shown, tpl) {
                  style="height:${rowHeight}px;grid-template-columns:${tpl}">${cells}</div>`;
 }
 
+/** The row's own structure, carrying any active substructure highlight. */
 function _structureSvg(idx, smiles) {
+    const hit = structFilter.qmol ? _substructMatch(idx) : null;
+    return _drawSvg(smiles, _structWidth() - 6, rowHeight - 6, hit);
+}
+
+function _drawSvg(smiles, w, h, hit = null) {
     if (!smiles || !_RDKit) return '<span class="bt-nostruct">—</span>';
 
-    const w = _structWidth() - 6;
-    const h = rowHeight - 6;
-    const hit = structFilter.qmol ? _substructMatch(idx) : null;
     const key = `${smiles}|${w}x${h}|${hit ? hit.atoms.join(',') : ''}`;
     if (svgCache.has(key)) return svgCache.get(key);
 
@@ -1309,8 +1348,10 @@ let refFps       = null;    // { kind, list: [{idx, fp, label, smiles}] }
 let nearestMatch = new Map();
 let nnHits       = [];      // last nearest-neighbour result, for "Select these"
 
-const NEAREST_LABEL_COL = 'Nearest Match';
-const NEAREST_SCORE_COL = 'Nearest Score';
+const NEAREST_LABEL_COL  = 'Nearest Match';
+const NEAREST_STRUCT_COL = 'Nearest Structure';
+const NEAREST_SCORE_COL  = 'Nearest Score';
+const NEAREST_SMILES_COL = 'Nearest SMILES';
 
 function _wireAnalysis() {
     document.getElementById('bt-nn-run').addEventListener('click', _runNearestNeighbours);
@@ -1555,7 +1596,7 @@ async function _runCrossFileMatch() {
     await _yield();
     const cache = _precomputeFingerprints(kind);
 
-    const labels = new Map(), scores = new Map();
+    const labels = new Map(), scores = new Map(), smiles = new Map();
     nearestMatch = new Map();
     const allScores = [];
     const CHUNK = 250;
@@ -1574,6 +1615,7 @@ async function _runCrossFileMatch() {
             if (bestRef) {
                 labels.set(i, bestRef.label);
                 scores.set(i, +best.toFixed(4));
+                smiles.set(i, bestRef.smiles);
                 nearestMatch.set(i, { label: bestRef.label, smiles: bestRef.smiles, score: best });
                 allScores.push(best);
             }
@@ -1587,8 +1629,12 @@ async function _runCrossFileMatch() {
         }
     }
 
+    // Added in display order. The draw-only column resolves its source at
+    // render time, so the SMILES it reads can be appended after it.
     _addComputedColumn(NEAREST_LABEL_COL, labels);
+    _addRenderColumn(NEAREST_STRUCT_COL, NEAREST_SMILES_COL);
     _addComputedColumn(NEAREST_SCORE_COL, scores);
+    _addComputedColumn(NEAREST_SMILES_COL, smiles, { filterable: false });
     _renderFilterCards();
     _buildColumnList();
     _rebuildHeader();
@@ -1607,8 +1653,9 @@ async function _runCrossFileMatch() {
             <div class="bt-an-stat"><span>median</span><b>${med.toFixed(3)}</b></div>
             <div class="bt-an-stat"><span>≥ 0.70</span><b>${high.toLocaleString()}</b></div>
         </div>
-        <p class="bt-an-hint">Added <b>${NEAREST_LABEL_COL}</b> and <b>${NEAREST_SCORE_COL}</b> —
-           sort or filter on them like any other column.</p>`;
+        <p class="bt-an-hint">Added <b>${NEAREST_LABEL_COL}</b>, <b>${NEAREST_STRUCT_COL}</b>,
+           <b>${NEAREST_SCORE_COL}</b> and <b>${NEAREST_SMILES_COL}</b>. Sort or filter on them like
+           any other column; hide what you don't need under Columns.</p>`;
 
     _setAnStatus('bt-ref-status',
         `Matched against ${refList.length.toLocaleString()} reference molecules · ${COEFFS[coeff].label} on ${FP_KINDS[kind].label}`,
@@ -1666,7 +1713,7 @@ function _runExport(act) {
 }
 
 function _toCsv(idxs) {
-    const cols = colNames;
+    const cols = colNames.filter(c => !renderCols.has(c));   // draw-only, no data
     const esc = v => {
         const s = v === undefined || v === null ? '' : String(v);
         return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
