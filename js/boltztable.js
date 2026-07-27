@@ -253,6 +253,7 @@ function _resetAll() {
     nearestMatch.clear();
     nnHits = [];
     refFps = null;
+    importedRefCols = [];
     document.getElementById('bt-nn-results').innerHTML = '';
     document.getElementById('bt-nn-select').classList.add('hidden');
     document.getElementById('bt-ref-summary').innerHTML = '';
@@ -335,6 +336,26 @@ function _addComputedColumn(name, valueByRowIdx, { filterable = true } = {}) {
     if (meta.type === 'number')        filters.set(name, { type: 'number', lo: meta.min, hi: meta.max, active: false });
     else if (meta.type === 'category') filters.set(name, { type: 'category', excluded: new Set(), active: false });
     else                               filters.set(name, { type: 'text', q: '', active: false });
+}
+
+/** Drop a computed column and every trace of it. */
+function _removeColumn(name) {
+    const i = colNames.indexOf(name);
+    if (i !== -1) colNames.splice(i, 1);
+    colMeta.delete(name);
+    filters.delete(name);
+    hiddenCols.delete(name);
+    renderCols.delete(name);
+    if (sortCol === name) { sortCol = null; sortDir = 1; }
+    for (const row of rows) delete row[name];
+}
+
+/** First free variant of `base`, so an imported column can't shadow one of ours. */
+function _uniqueColName(base) {
+    if (!colNames.includes(base)) return base;
+    let n = 2;
+    while (colNames.includes(`${base} (${n})`)) n++;
+    return `${base} (${n})`;
 }
 
 /**
@@ -1282,7 +1303,9 @@ function _renderRecord() {
         finally { if (mol) mol.delete(); }
     }
 
-    const fields = colNames.map(c => `
+    // Draw-only columns hold no value of their own — the structure they render
+    // is already shown above, so listing them here would just be a blank row.
+    const fields = colNames.filter(c => !renderCols.has(c)).map(c => `
         <div class="bt-rec-field">
             <span class="bt-rec-key" title="${_esc(c)}">${_esc(c)}</span>
             <span class="bt-rec-val" title="${_esc(String(row[c] ?? ''))}">${_esc(String(row[c] ?? '—'))}</span>
@@ -1346,6 +1369,9 @@ let refFps       = null;    // { kind, list: [{idx, fp, label, smiles}] }
 
 // Row index -> { label, smiles, score } from the last cross-file run.
 let nearestMatch = new Map();
+// Columns pulled in from the reference file last run, so a re-run can retire
+// them instead of leaving stale ones behind when the reference changes.
+let importedRefCols = [];
 let nnHits       = [];      // last nearest-neighbour result, for "Select these"
 
 const NEAREST_LABEL_COL  = 'Nearest Match';
@@ -1597,6 +1623,7 @@ async function _runCrossFileMatch() {
     const cache = _precomputeFingerprints(kind);
 
     const labels = new Map(), scores = new Map(), smiles = new Map();
+    const refRowIdx = new Map();     // main row -> index of its matched reference row
     nearestMatch = new Map();
     const allScores = [];
     const CHUNK = 250;
@@ -1616,6 +1643,7 @@ async function _runCrossFileMatch() {
                 labels.set(i, bestRef.label);
                 scores.set(i, +best.toFixed(4));
                 smiles.set(i, bestRef.smiles);
+                refRowIdx.set(i, bestRef.idx);
                 nearestMatch.set(i, { label: bestRef.label, smiles: bestRef.smiles, score: best });
                 allScores.push(best);
             }
@@ -1635,6 +1663,26 @@ async function _runCrossFileMatch() {
     _addRenderColumn(NEAREST_STRUCT_COL, NEAREST_SMILES_COL);
     _addComputedColumn(NEAREST_SCORE_COL, scores);
     _addComputedColumn(NEAREST_SMILES_COL, smiles, { filterable: false });
+
+    // Carry the matched reference row's own data across. Retire the previous
+    // run's imports first, so pointing at a different reference file doesn't
+    // leave columns behind that no longer mean anything.
+    for (const name of importedRefCols) _removeColumn(name);
+    importedRefCols = [];
+
+    if (document.getElementById('bt-ref-import').checked) {
+        // The structure and label columns are already surfaced above.
+        const shown = new Set([refSmilesCol, refIdCol].filter(Boolean));
+        for (const rc of refCols) {
+            if (shown.has(rc)) continue;
+            const colName = _uniqueColName(`Ref: ${rc}`);
+            const vals = new Map();
+            for (const [rowIdx, ri] of refRowIdx) vals.set(rowIdx, refRows[ri][rc]);
+            _addComputedColumn(colName, vals);
+            importedRefCols.push(colName);
+        }
+    }
+
     _renderFilterCards();
     _buildColumnList();
     _rebuildHeader();
@@ -1654,8 +1702,12 @@ async function _runCrossFileMatch() {
             <div class="bt-an-stat"><span>≥ 0.70</span><b>${high.toLocaleString()}</b></div>
         </div>
         <p class="bt-an-hint">Added <b>${NEAREST_LABEL_COL}</b>, <b>${NEAREST_STRUCT_COL}</b>,
-           <b>${NEAREST_SCORE_COL}</b> and <b>${NEAREST_SMILES_COL}</b>. Sort or filter on them like
-           any other column; hide what you don't need under Columns.</p>`;
+           <b>${NEAREST_SCORE_COL}</b> and <b>${NEAREST_SMILES_COL}</b>${
+             importedRefCols.length
+               ? `, plus <b>${importedRefCols.length}</b> column${importedRefCols.length === 1 ? '' : 's'}
+                  carried across from the reference file as <b>Ref:&nbsp;…</b>`
+               : ''}. Sort or filter on them like any other column; hide what you don't
+           need under Columns.</p>`;
 
     _setAnStatus('bt-ref-status',
         `Matched against ${refList.length.toLocaleString()} reference molecules · ${COEFFS[coeff].label} on ${FP_KINDS[kind].label}`,
