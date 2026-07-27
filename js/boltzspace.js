@@ -10,6 +10,7 @@
 let _RDKit       = null;
 let csvData      = [];
 let validIndices = [];       // indices into csvData of rows with valid SMILES
+let fingerprints = [];       // packed ECFP4, index-aligned with validIndices
 let projections  = null;     // { umap: [[x,y],...], tsne: [[x,y],...] }
 let highlightIds = new Set();
 let activeScore  = 'score1'; // 'score1' | 'score2'
@@ -18,8 +19,27 @@ let columnMap    = { smiles: '', id: '', score1: '', score2: '' };
 let scriptsLoaded    = false;
 let _crossUpdating   = false; // guard against infinite cross-plot update loop
 let _activeSettingsTab = 'umap'; // 'umap' | 'tsne'
+let _pickMethod    = 'butina';   // 'butina' | 'maxmin'
+let _methodsBase   = '';         // projection half of the methods bar, so a pick can append
 
 const COLORSCALE = [[0, '#f0ede8'], [0.5, '#67826b'], [1, '#35583d']];
+
+// Butina needs the full pairwise distance matrix; above this it is slow enough
+// to freeze the tab, and a pool that large hasn't really been filtered anyway.
+const BUTINA_MAX = 3000;
+
+const PICK_EXPLAINERS = {
+    butina:
+        '<strong>Butina (sphere exclusion).</strong> Groups the survivors into chemotypes by ' +
+        'fingerprint similarity, then keeps the best-scoring molecule from each group.<br>' +
+        '<em>Best for:</em> one representative per scaffold, when covering chemotypes matters more ' +
+        'than hitting an exact count. This is the standard hit cherry-pick.',
+    maxmin:
+        '<strong>MaxMin (max–min dissimilarity).</strong> Repeatedly adds whichever molecule sits ' +
+        'furthest from everything picked so far.<br>' +
+        '<em>Best for:</em> filling an exact number of wells with maximum spread. It gravitates ' +
+        'toward outliers, so filter hard before you run it.',
+};
 
 const CDN_SCRIPTS = [
     'https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js',
@@ -89,6 +109,29 @@ function _wireListeners() {
             btn.textContent = 'Copied!';
             setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
         });
+
+    // ---- Diversity pick ----
+    document.getElementById('pick-tab-butina')
+        .addEventListener('click', () => _setPickMethod('butina'));
+    document.getElementById('pick-tab-maxmin')
+        .addEventListener('click', () => _setPickMethod('maxmin'));
+    document.getElementById('pick-advanced-toggle')
+        .addEventListener('change', () => _setPickMethod(_pickMethod));
+    document.getElementById('pick-filter-toggle')
+        .addEventListener('change', e => _setFilterEnabled(e.target.checked));
+    document.getElementById('pick-filter-mode')
+        .addEventListener('change', _onFilterModeChange);
+    document.getElementById('run-pick-btn')
+        .addEventListener('click', runDiversityPick);
+    document.getElementById('clear-pick-btn')
+        .addEventListener('click', () => { clearSelection(); _setPickStatus('', ''); });
+    document.getElementById('pick-copy-btn')
+        .addEventListener('click', _copyPickedIds);
+
+    for (const id of ['pick-rank-col', 'pick-direction', 'pick-filter-value'])
+        document.getElementById(id).addEventListener('input', _updateSurvivorCount);
+
+    _setPickMethod('butina');
 }
 
 function _updateMethodsPanel(p) {
@@ -98,8 +141,14 @@ function _updateMethodsPanel(p) {
     if (p.ranUmap) parts.push(`UMAP: neighbors=${p.umapNeighbors} min_dist=${p.minDist}`);
     if (p.ranTsne) parts.push(`t-SNE: perplexity=${p.perplexity} iter=${p.nIter} lr=${p.lr}`);
     parts.push(`${p.nMols} molecules${skipPart}`);
-    document.getElementById('space-methods-text').textContent = parts.join('  ·  ');
+    _methodsBase = parts.join('  ·  ');
+    document.getElementById('space-methods-text').textContent = _methodsBase;
     document.getElementById('space-methods-bar').classList.remove('hidden');
+}
+
+function _appendPickToMethods(text) {
+    document.getElementById('space-methods-text').textContent =
+        text ? `${_methodsBase}  ·  ${text}` : _methodsBase;
 }
 
 function _switchSettingsTab(tab) {
@@ -158,8 +207,10 @@ function _resetForNewCsv() {
     // Reset state
     projections   = null;
     validIndices  = [];
+    fingerprints  = [];
     highlightIds  = new Set();
     selectedIds   = new Set();
+    _methodsBase  = '';
 
     // Tear down existing Plotly instances so a fresh CSV gets a clean canvas
     for (const id of ['umap-plot', 'tsne-plot']) {
@@ -178,7 +229,10 @@ function _resetForNewCsv() {
     document.getElementById('space-card-strip').classList.add('hidden');
     document.getElementById('space-highlight-section').classList.add('hidden');
     document.getElementById('space-score-section').classList.add('hidden');
+    document.getElementById('space-pick-section').classList.add('hidden');
+    document.getElementById('pick-copy-btn').classList.add('hidden');
     document.getElementById('space-empty-state').classList.remove('hidden');
+    _setPickStatus('', '');
 
     // Reset highlight input
     const hi = document.getElementById('highlight-input');
@@ -245,6 +299,9 @@ export async function runProjection() {
         _setUploadStatus(`Too few valid molecules (${fps.length}). Check your SMILES column.`, 'error');
         return;
     }
+
+    // Bit-packed copies for Tanimoto; the dense arrays above stay for UMAP/t-SNE.
+    fingerprints = fps.map(_packFp);
 
     const skipNote = skipped > 0 ? ` · ${skipped} invalid skipped` : '';
 
@@ -315,6 +372,8 @@ export async function runProjection() {
 
     document.getElementById('space-highlight-section').classList.remove('hidden');
     document.getElementById('space-score-section').classList.remove('hidden');
+    document.getElementById('space-pick-section').classList.remove('hidden');
+    _initPickControls();
     _setUploadStatus(`Done — ${fps.length} molecules${skipNote}`, 'success');
 
     _updateMethodsPanel({
@@ -381,12 +440,12 @@ function _renderOnePlot(plotId, coords, title) {
     const scoreKey = columnMap[activeScore];
 
     // Two arrays: normal points and highlighted points
-    const nx = [], ny = [], nColor = [], nHover = [], nCustom = [];
-    const hx = [], hy = [],             hHover = [], hCustom = [];
+    const nx = [], ny = [], nColor = [], nHover = [], nCustom = [], nSel = [];
+    const hx = [], hy = [],             hHover = [], hCustom = [], hSel = [];
 
     validIndices.forEach((rowIdx, i) => {
         const row   = csvData[rowIdx];
-        const id    = String(row[columnMap.id] ?? rowIdx);
+        const id    = _rowId(rowIdx);
         const score = parseFloat(row[scoreKey]);
         const x     = Array.isArray(coords[i]) ? coords[i][0] : coords[i * 2];
         const y     = Array.isArray(coords[i]) ? coords[i][1] : coords[i * 2 + 1];
@@ -394,13 +453,19 @@ function _renderOnePlot(plotId, coords, title) {
                     + (columnMap.score2 ? `<br>${_esc(columnMap.score2)}: ${_fmtScore(row[columnMap.score2])}` : '');
 
         if (highlightIds.has(id)) {
+            if (selectedIds.has(id)) hSel.push(hx.length);
             hx.push(x); hy.push(y); hHover.push(hover); hCustom.push(rowIdx);
         } else {
+            if (selectedIds.has(id)) nSel.push(nx.length);
             nx.push(x); ny.push(y);
             nColor.push(isNaN(score) ? null : score);
             nHover.push(hover); nCustom.push(rowIdx);
         }
     });
+
+    // Plotly reads an empty array as "nothing selected, dim everything", so an
+    // absent selection has to be null rather than [].
+    const anySelected = selectedIds.size > 0;
 
     const traces = [
         {
@@ -412,6 +477,9 @@ function _renderOnePlot(plotId, coords, title) {
                 showscale: false,
                 line: { width: 0 },
             },
+            selectedpoints: anySelected ? nSel : null,
+            selected:   { marker: { size: 10, opacity: 1 } },
+            unselected: { marker: { opacity: 0.12 } },
             text: nHover, hovertemplate: '%{text}<extra></extra>',
             customdata: nCustom, name: 'molecules',
         },
@@ -421,6 +489,9 @@ function _renderOnePlot(plotId, coords, title) {
                 size: 12, opacity: 1.0, symbol: 'star',
                 color: '#FCC400', line: { color: '#1a1a1a', width: 1.5 },
             },
+            selectedpoints: anySelected ? hSel : null,
+            selected:   { marker: { opacity: 1 } },
+            unselected: { marker: { opacity: 0.15 } },
             text: hHover, hovertemplate: '%{text}<extra></extra>',
             customdata: hCustom, name: 'highlighted',
         },
@@ -481,11 +552,7 @@ function _attachPlotEvents(plotId) {
 
 function _extractSelection(points) {
     selectedIds = new Set();
-    for (const pt of points) {
-        const rowIdx = pt.customdata;
-        const id = String(csvData[rowIdx][columnMap.id] ?? rowIdx);
-        selectedIds.add(id);
-    }
+    for (const pt of points) selectedIds.add(_rowId(pt.customdata));
 }
 
 function _syncSelection(plotId) {
@@ -497,7 +564,7 @@ function _syncSelection(plotId) {
     let ni = 0, hi = 0;
 
     validIndices.forEach(rowIdx => {
-        const id = String(csvData[rowIdx][columnMap.id] ?? rowIdx);
+        const id = _rowId(rowIdx);
         if (highlightIds.has(id)) {
             if (selectedIds.has(id)) t1.push(hi);
             hi++;
@@ -513,6 +580,8 @@ function _syncSelection(plotId) {
 export function clearSelection() {
     selectedIds = new Set();
     _showCardStripPlaceholder();
+    document.getElementById('pick-copy-btn').classList.add('hidden');
+    _appendPickToMethods('');
     for (const id of ['umap-plot', 'tsne-plot']) {
         const el = document.getElementById(id);
         if (el._bsInitted) Plotly.restyle(el, { selectedpoints: [null, null] });
@@ -710,8 +779,8 @@ export function renderCardStrip() {
 
     const scoreKey = columnMap[activeScore];
     const rows = validIndices
-        .map(i => csvData[i])
-        .filter(row => selectedIds.has(String(row[columnMap.id] ?? '')))
+        .filter(rowIdx => selectedIds.has(_rowId(rowIdx)))
+        .map(rowIdx => csvData[rowIdx])
         .sort((a, b) => {
             const va = parseFloat(a[scoreKey]);
             const vb = parseFloat(b[scoreKey]);
@@ -806,8 +875,368 @@ export function setActiveScore(scoreKey) {
 }
 
 // ----------------------------------------------------------------
+// Diversity pick — fingerprint-space selection
+//
+// Both methods run on ECFP4 Tanimoto distances, never on the 2-D projection
+// coordinates: t-SNE discards global distances entirely and UMAP's embedded
+// distances are not a metric, so a pick made from the plot would be selecting
+// on projection artefacts and would not survive a reseed.
+//
+//   Butina — Taylor/Butina sphere exclusion (Butina, J Chem Inf Comput Sci
+//            1999, 39:747). Leader-follower clustering at a Tanimoto cutoff;
+//            one representative per cluster.
+//   MaxMin — greedy maximum-dissimilarity selection (Ashton et al.,
+//            Quant Struct-Act Relat 2002, 21:598), as in RDKit's MaxMinPicker.
+// ----------------------------------------------------------------
+
+function _packFp(bits) {
+    const words = new Uint32Array(bits.length >> 5);
+    let pc = 0;
+    for (let i = 0; i < bits.length; i++) {
+        if (bits[i]) { words[i >> 5] |= (1 << (i & 31)); pc++; }
+    }
+    return { words, pc };
+}
+
+function _tanimoto(a, b) {
+    const aw = a.words, bw = b.words;
+    let c = 0;
+    for (let k = 0; k < aw.length; k++) {
+        let v = aw[k] & bw[k];
+        v -= (v >>> 1) & 0x55555555;
+        v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
+        c += (((v + (v >>> 4)) & 0x0f0f0f0f) * 0x01010101) >>> 24;
+    }
+    const denom = a.pc + b.pc - c;
+    return denom === 0 ? 0 : c / denom;
+}
+
+// Condensed (upper-triangle) index for the pairwise distance matrix, i < j.
+function _dIdx(n, i, j) { return n * i - ((i * (i + 1)) >> 1) + j - i - 1; }
+
+function _condensedDistances(fps) {
+    const n = fps.length;
+    const D = new Float32Array((n * (n - 1)) / 2);
+    let k = 0;
+    for (let i = 0; i < n; i++)
+        for (let j = i + 1; j < n; j++)
+            D[k++] = 1 - _tanimoto(fps[i], fps[j]);
+    return D;
+}
+
+function _butina(D, n, distCut) {
+    const nbrs = Array.from({ length: n }, () => []);
+    for (let i = 0; i < n; i++)
+        for (let j = i + 1; j < n; j++)
+            if (D[_dIdx(n, i, j)] <= distCut) { nbrs[i].push(j); nbrs[j].push(i); }
+
+    // Densest molecule seeds each cluster and absorbs its unassigned neighbours.
+    // Ties break on descending index to match RDKit, which sorts (count, index)
+    // tuples with reverse=True — the tie-break changes the cluster count.
+    const order = Array.from({ length: n }, (_, i) => i)
+        .sort((a, b) => nbrs[b].length - nbrs[a].length || b - a);
+
+    const assigned = new Uint8Array(n);
+    const clusters = [];
+    for (const c of order) {
+        if (assigned[c]) continue;
+        assigned[c] = 1;
+        const members = [c];                    // members[0] is the cluster centre
+        for (const j of nbrs[c]) if (!assigned[j]) { assigned[j] = 1; members.push(j); }
+        clusters.push(members);
+    }
+    return clusters;
+}
+
+// Simple mode: cluster count rises monotonically with the similarity cutoff,
+// so bisect until it lands on the number of picks the user asked for.
+function _butinaAutoCutoff(D, n, targetClusters) {
+    let lo = 0.10, hi = 0.95, best = null;
+    for (let it = 0; it < 18; it++) {
+        const sim = (lo + hi) / 2;
+        const clusters = _butina(D, n, 1 - sim);
+        const diff = clusters.length - targetClusters;
+        if (!best || Math.abs(diff) < Math.abs(best.diff)) best = { sim, clusters, diff };
+        if (diff === 0) break;
+        if (diff < 0) lo = sim; else hi = sim;
+    }
+    return best;
+}
+
+function _maxMin(fps, count, seedIdx) {
+    const n = fps.length;
+    const picked = [seedIdx];
+    const minD = new Float64Array(n);
+    for (let i = 0; i < n; i++) minD[i] = 1 - _tanimoto(fps[i], fps[seedIdx]);
+    minD[seedIdx] = -1;   // -1 marks "already picked"
+
+    while (picked.length < count) {
+        let best = -1, bestD = -Infinity;
+        for (let i = 0; i < n; i++) if (minD[i] > bestD) { bestD = minD[i]; best = i; }
+        if (best < 0 || bestD < 0) break;
+        picked.push(best);
+        minD[best] = -1;
+        for (let i = 0; i < n; i++) {
+            if (minD[i] < 0) continue;
+            const d = 1 - _tanimoto(fps[i], fps[best]);
+            if (d < minD[i]) minD[i] = d;
+        }
+    }
+    return picked;
+}
+
+// Fixed-seed LCG so a "random" first pick still reproduces across runs.
+function _seededIndex(n) {
+    const s = (0x4d425350 * 1664525 + 1013904223) & 0x7fffffff;
+    return s % n;
+}
+
+// ---- Filter ----
+
+// With the filter off, unscorable rows are still in play, so both comparators
+// have to treat a missing score as the worst possible value rather than as NaN.
+function _better(a, b, dirHigher) {
+    if (!Number.isFinite(a)) return false;
+    if (!Number.isFinite(b)) return true;
+    return dirHigher ? a > b : a < b;
+}
+
+function _cmpScore(a, b, dirHigher) {   // best first, unscorable last
+    if (!Number.isFinite(a)) return Number.isFinite(b) ? 1 : 0;
+    if (!Number.isFinite(b)) return -1;
+    return dirHigher ? b - a : a - b;
+}
+
+function _pickOpts() {
+    return {
+        filterOn:  document.getElementById('pick-filter-toggle').checked,
+        rankCol:   document.getElementById('pick-rank-col').value,
+        dirHigher: document.getElementById('pick-direction').value === 'higher',
+        mode:      document.getElementById('pick-filter-mode').value,
+        value:     parseFloat(document.getElementById('pick-filter-value').value),
+        advanced:  document.getElementById('pick-advanced-toggle').checked,
+        targetN:   Math.max(1, parseInt(document.getElementById('pick-n').value, 10) || 24),
+    };
+}
+
+// Survivors carry fpIdx (into fingerprints/validIndices), rowIdx and their score.
+function _computeSurvivors(o) {
+    const all = validIndices.map((rowIdx, fpIdx) =>
+        ({ fpIdx, rowIdx, v: parseFloat(csvData[rowIdx][o.rankCol]) }));
+
+    if (!o.filterOn) return all;
+
+    const scored = all.filter(s => Number.isFinite(s.v));
+
+    if (o.mode === 'absolute') {
+        if (!Number.isFinite(o.value)) return scored;
+        return scored.filter(s => (o.dirHigher ? s.v >= o.value : s.v <= o.value));
+    }
+
+    scored.sort((a, b) => _cmpScore(a.v, b.v, o.dirHigher));
+    const pct = Number.isFinite(o.value) ? Math.min(100, Math.max(1, o.value)) : 10;
+    return scored.slice(0, Math.max(2, Math.round((scored.length * pct) / 100)));
+}
+
+function _filterLabel(o) {
+    if (!o.filterOn) return 'no filter';
+    return o.mode === 'absolute'
+        ? `${o.rankCol} ${o.dirHigher ? '≥' : '≤'} ${o.value}`
+        : `top ${o.value}% by ${o.rankCol}`;
+}
+
+// ---- UI ----
+
+function _initPickControls() {
+    const sel  = document.getElementById('pick-rank-col');
+    const cols = [columnMap.score1, columnMap.score2].filter(Boolean);
+    sel.innerHTML = cols.map(c => `<option value="${_esc(c)}">${_esc(c)}</option>`).join('');
+    sel.value = columnMap.score1;
+    _updateSurvivorCount();
+}
+
+function _setPickMethod(method) {
+    _pickMethod = method;
+    const advanced = document.getElementById('pick-advanced-toggle').checked;
+
+    document.getElementById('pick-tab-butina').classList.toggle('active', method === 'butina');
+    document.getElementById('pick-tab-maxmin').classList.toggle('active', method === 'maxmin');
+    document.getElementById('pick-explainer').innerHTML = PICK_EXPLAINERS[method];
+
+    document.getElementById('pick-butina-advanced')
+        .classList.toggle('hidden', !(advanced && method === 'butina'));
+    document.getElementById('pick-maxmin-advanced')
+        .classList.toggle('hidden', !(advanced && method === 'maxmin'));
+
+    // In advanced Butina the Tanimoto cutoff decides how many clusters you get,
+    // so an explicit pick count would be a lie.
+    document.getElementById('pick-n-row')
+        .classList.toggle('hidden', advanced && method === 'butina');
+
+    _updateSurvivorCount();   // the "too thin" threshold is method-dependent
+}
+
+function _onFilterModeChange() {
+    const absolute = document.getElementById('pick-filter-mode').value === 'absolute';
+    const dirHigher = document.getElementById('pick-direction').value === 'higher';
+    const input = document.getElementById('pick-filter-value');
+
+    document.getElementById('pick-filter-value-label').textContent =
+        absolute ? 'Keep score' : 'Keep top';
+    document.getElementById('pick-filter-suffix').textContent =
+        absolute ? (dirHigher ? '≥' : '≤') : '%';
+
+    input.step  = absolute ? '0.05' : '1';
+    input.value = absolute ? '0.5'  : '10';
+    _updateSurvivorCount();
+}
+
+function _setFilterEnabled(on) {
+    for (const id of ['pick-filter-mode', 'pick-filter-value'])
+        document.getElementById(id).disabled = !on;
+    document.getElementById('pick-filter-suffix').classList.toggle('muted', !on);
+    _updateSurvivorCount();
+}
+
+function _updateSurvivorCount() {
+    const el = document.getElementById('pick-survivors');
+    if (!fingerprints.length) { el.textContent = '—'; el.classList.remove('warn'); return; }
+
+    const o = _pickOpts();
+    _onFilterSuffixRefresh(o);
+
+    if (!o.filterOn) {
+        el.innerHTML = `No filter — all <strong>${validIndices.length}</strong> molecules`;
+        const tooMany = _pickMethod === 'butina' && validIndices.length > BUTINA_MAX;
+        el.classList.toggle('warn', tooMany);
+        if (tooMany) el.innerHTML += `<br>Too many for Butina (max ${BUTINA_MAX}) — filter, or use MaxMin.`;
+        return;
+    }
+
+    const n = _computeSurvivors(o).length;
+    el.innerHTML = `<strong>${n}</strong> of ${validIndices.length} molecules survive the filter`;
+
+    // A pool that barely exceeds the pick size has nothing left to diversify over.
+    const tooThin = n < 10 || (_pickMethod === 'maxmin' && n < o.targetN * 2);
+    el.classList.toggle('warn', tooThin);
+    if (tooThin) el.innerHTML += '<br>Too thin to diversify — loosen the cutoff.';
+}
+
+function _onFilterSuffixRefresh(o) {
+    if (o.mode === 'absolute')
+        document.getElementById('pick-filter-suffix').textContent = o.dirHigher ? '≥' : '≤';
+}
+
+function _setPickStatus(msg, type) {
+    const el = document.getElementById('pick-status');
+    el.textContent = msg;
+    el.className = type ? `star-status ${type}` : 'star-status';
+    el.classList.toggle('hidden', !msg);
+}
+
+function _copyPickedIds() {
+    navigator.clipboard.writeText([...selectedIds].join('\n')).catch(() => {});
+    const btn = document.getElementById('pick-copy-btn');
+    btn.textContent = `Copied ${selectedIds.size} IDs`;
+    setTimeout(() => { btn.textContent = 'Copy picked IDs'; }, 1500);
+}
+
+// ---- Driver ----
+
+export async function runDiversityPick() {
+    if (!fingerprints.length) return;
+
+    const btn = document.getElementById('run-pick-btn');
+    btn.disabled = true;
+
+    try {
+        const o    = _pickOpts();
+        const surv = _computeSurvivors(o);
+
+        if (surv.length < 2) {
+            _setPickStatus('Filter left fewer than 2 molecules — loosen the cutoff.', 'error');
+            return;
+        }
+
+        const fps = surv.map(s => fingerprints[s.fpIdx]);
+        let pickedLocal, detail;
+
+        if (_pickMethod === 'butina') {
+            if (surv.length > BUTINA_MAX) {
+                _setPickStatus(
+                    `Butina needs all ${surv.length}² pairwise distances. Filter to ` +
+                    `≤${BUTINA_MAX} molecules, or use MaxMin.`, 'error');
+                return;
+            }
+
+            _setPickStatus(`Clustering ${surv.length} molecules…`, 'loading');
+            await _tick();
+
+            const D = _condensedDistances(fps);
+            let clusters, sim;
+            if (o.advanced) {
+                sim = parseFloat(document.getElementById('pick-butina-cutoff').value) || 0.65;
+                clusters = _butina(D, fps.length, 1 - sim);
+            } else {
+                ({ clusters, sim } = _butinaAutoCutoff(D, fps.length, o.targetN));
+            }
+
+            const repMode = o.advanced ? document.getElementById('pick-butina-rep').value : 'score';
+            let reps = clusters.map(members =>
+                repMode === 'centroid'
+                    ? members[0]
+                    : members.reduce((best, m) =>
+                        _better(surv[m].v, surv[best].v, o.dirHigher) ? m : best, members[0]));
+
+            reps.sort((a, b) => _cmpScore(surv[a].v, surv[b].v, o.dirHigher));
+
+            // Simple mode promises exactly N; bisection can overshoot by a cluster
+            // or two, so drop the weakest representatives to land on the number.
+            const dropped = o.advanced ? 0 : Math.max(0, reps.length - o.targetN);
+            if (dropped) reps = reps.slice(0, o.targetN);
+
+            pickedLocal = reps;
+            detail = `Butina Tc=${sim.toFixed(2)} · ${clusters.length} clusters → ${reps.length} picks`
+                   + (dropped ? ` (${dropped} weakest reps dropped)` : '');
+        } else {
+            const seedMode = o.advanced ? document.getElementById('pick-maxmin-seed').value : 'top';
+            const seed = seedMode === 'top'
+                ? surv.reduce((b, s, i) => (_better(s.v, surv[b].v, o.dirHigher) ? i : b), 0)
+                : _seededIndex(fps.length);
+
+            const count = Math.min(o.targetN, fps.length);
+            _setPickStatus(`Selecting ${count} of ${surv.length}…`, 'loading');
+            await _tick();
+
+            pickedLocal = _maxMin(fps, count, seed);
+            detail = `MaxMin · first=${seedMode === 'top' ? 'top scorer' : 'seeded random'}`
+                   + ` → ${pickedLocal.length} picks`;
+        }
+
+        // The pick becomes the plot selection, which also drives the card strip.
+        selectedIds = new Set(pickedLocal.map(i => _rowId(surv[i].rowIdx)));
+        renderPlots();
+        renderCardStrip();
+
+        document.getElementById('pick-copy-btn').classList.remove('hidden');
+        _appendPickToMethods(`Pick: ${_filterLabel(o)} · ${detail}`);
+        _setPickStatus(
+            `${selectedIds.size} picked from ${surv.length} survivors ` +
+            `(${validIndices.length} total)`, 'success');
+    } catch (e) {
+        _setPickStatus('Pick failed: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// ----------------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------------
+
+function _rowId(rowIdx) {
+    return String(csvData[rowIdx][columnMap.id] ?? rowIdx);
+}
 
 function _setUploadStatus(msg, type) {
     const el = document.getElementById('space-upload-status');

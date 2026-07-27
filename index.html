@@ -170,6 +170,117 @@
                     <div class="space-legend" id="space-legend"></div>
                 </div>
 
+                <div class="star-section hidden" id="space-pick-section">
+                    <label class="star-label">Diversity Pick</label>
+
+                    <div class="space-settings-block">
+                        <div class="space-settings-heading">1 · Filter <span class="space-heading-note">optional</span></div>
+
+                        <div class="space-settings-row space-settings-manual-row">
+                            <span class="space-settings-label space-settings-label-manual">Filter first</span>
+                            <label class="space-toggle-switch">
+                                <input type="checkbox" id="pick-filter-toggle" checked>
+                                <span class="space-toggle-track"></span>
+                            </label>
+                        </div>
+
+                        <!-- Rank column and direction stay live with the filter off:
+                             Butina picks its representative by score, MaxMin seeds on it. -->
+                        <div class="space-settings-row">
+                            <span class="space-settings-label">Rank by</span>
+                            <select id="pick-rank-col" class="space-select space-select-inline"></select>
+                        </div>
+                        <div class="space-settings-row">
+                            <span class="space-settings-label">Better is</span>
+                            <select id="pick-direction" class="space-select space-select-inline">
+                                <option value="higher" selected>Higher</option>
+                                <option value="lower">Lower</option>
+                            </select>
+                        </div>
+                        <div class="space-settings-row">
+                            <span class="space-settings-label">Cutoff by</span>
+                            <select id="pick-filter-mode" class="space-select space-select-inline">
+                                <option value="percentile" selected>Top %</option>
+                                <option value="absolute">Score value</option>
+                            </select>
+                        </div>
+                        <div class="space-settings-row">
+                            <span class="space-settings-label" id="pick-filter-value-label">Keep top</span>
+                            <span class="space-pick-value-wrap">
+                                <input type="number" class="space-settings-input" id="pick-filter-value" value="10" min="0" step="1">
+                                <span class="space-pick-suffix" id="pick-filter-suffix">%</span>
+                            </span>
+                        </div>
+
+                        <div class="space-pick-survivors" id="pick-survivors">—</div>
+                        <p class="space-pick-hint">
+                            Filtering first is usually right — otherwise the pick spends slots on chemistry
+                            the model already rejected. Turn it off to diversify across the whole library.
+                            Prefer <em>Top %</em> over an absolute cutoff: Boltz binding probabilities aren't
+                            calibrated, so a threshold that works on one target won't transfer to the next.
+                        </p>
+                    </div>
+
+                    <div class="space-settings-block">
+                        <div class="space-settings-heading">2 · Method</div>
+
+                        <div class="space-settings-tabs">
+                            <button class="settings-tab-btn active" id="pick-tab-butina">Butina</button>
+                            <button class="settings-tab-btn" id="pick-tab-maxmin">MaxMin</button>
+                        </div>
+
+                        <p class="space-pick-explainer" id="pick-explainer"></p>
+
+                        <div class="space-settings-row space-settings-manual-row">
+                            <span class="space-settings-label space-settings-label-manual">Advanced</span>
+                            <label class="space-toggle-switch">
+                                <input type="checkbox" id="pick-advanced-toggle">
+                                <span class="space-toggle-track"></span>
+                            </label>
+                        </div>
+
+                        <div class="space-settings-row" id="pick-n-row">
+                            <span class="space-settings-label">Pick</span>
+                            <input type="number" class="space-settings-input" id="pick-n" value="24" min="1" max="500">
+                        </div>
+
+                        <div id="pick-butina-advanced" class="hidden">
+                            <div class="space-settings-row">
+                                <span class="space-settings-label" title="Tanimoto similarity at or above which two molecules count as the same chemotype">Tanimoto cutoff</span>
+                                <input type="number" class="space-settings-input" id="pick-butina-cutoff" value="0.65" min="0.1" max="0.95" step="0.05">
+                            </div>
+                            <div class="space-settings-row">
+                                <span class="space-settings-label">Representative</span>
+                                <select id="pick-butina-rep" class="space-select space-select-inline">
+                                    <option value="score" selected>Best score</option>
+                                    <option value="centroid">Cluster centre</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div id="pick-maxmin-advanced" class="hidden">
+                            <div class="space-settings-row">
+                                <span class="space-settings-label">First pick</span>
+                                <select id="pick-maxmin-seed" class="space-select space-select-inline">
+                                    <option value="top" selected>Top scorer</option>
+                                    <option value="random">Random (seeded)</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button class="star-apply-btn" id="run-pick-btn">Run Diversity Pick</button>
+                    <button class="star-load-btn hidden" id="pick-copy-btn">Copy picked IDs</button>
+                    <button class="star-load-btn" id="clear-pick-btn">Clear selection</button>
+                    <div class="star-status hidden" id="pick-status"></div>
+
+                    <p class="space-pick-note">
+                        Picks are computed in ECFP4 fingerprint space, never from the 2-D plot coordinates —
+                        UMAP and t-SNE distances aren't metric. The plots show whether a pick covers the
+                        space; they don't decide it.
+                    </p>
+                </div>
+
             </div>
         </div>
 
