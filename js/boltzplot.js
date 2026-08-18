@@ -1,7 +1,7 @@
 /**
  * boltzplot.js
  * General-purpose scatter plot: upload CSV/TSV, pick axes, colour, label, SMILES.
- * Advanced: marginal histograms · linear regression · density overlay.
+ * Advanced: marginal histograms · linear regression · density overlay · correlation stats.
  * Card strip: lasso-select points to compare structures.
  */
 
@@ -73,7 +73,7 @@ function _wireListeners() {
         .addEventListener('click', _toggleAdvanced);
 
     // Live-update toggles when a plot already exists
-    for (const id of ['bp-opt-marginals', 'bp-opt-regression', 'bp-opt-density']) {
+    for (const id of ['bp-opt-marginals', 'bp-opt-regression', 'bp-opt-density', 'bp-opt-stats']) {
         document.getElementById(id)
             .addEventListener('change', () => { if (_initted) _redrawTraces(); });
     }
@@ -236,9 +236,10 @@ function _redrawTraces() {
     const xs           = _currentPts.map(p => p.x);
     const ys           = _currentPts.map(p => p.y);
 
-    const showMarg = document.getElementById('bp-opt-marginals').checked;
-    const showReg  = document.getElementById('bp-opt-regression').checked;
-    const showDens = document.getElementById('bp-opt-density').checked;
+    const showMarg  = document.getElementById('bp-opt-marginals').checked;
+    const showReg   = document.getElementById('bp-opt-regression').checked;
+    const showDens  = document.getElementById('bp-opt-density').checked;
+    const showStats = document.getElementById('bp-opt-stats').checked;
 
     const traces = [];
     if (showDens)  traces.push(_buildDensityTrace(xs, ys));
@@ -252,7 +253,8 @@ function _redrawTraces() {
         traces.push(_buildRightHistogram(ys));
     }
 
-    const layout = _buildLayout(numColor, showMarg, showReg);
+    const stats  = showStats ? _computeCorrelations(xs, ys) : null;
+    const layout = _buildLayout(numColor, showMarg, showReg, stats);
     const plotEl = document.getElementById('bp-plot');
 
     if (_initted) {
@@ -400,12 +402,13 @@ function _buildRightHistogram(ys) {
 // Layout
 // ================================================================
 
-function _buildLayout(numColor, showMarg, showReg) {
+function _buildLayout(numColor, showMarg, showReg, stats) {
     const { xCol, yCol, colorCol } = _currentConfig;
     const showLegend = (!numColor && !!colorCol) || showReg;
     const rNoMarg    = numColor && colorCol ? 80 : 20;
 
     const shared = {
+        annotations: stats ? [_buildStatsAnnotation(stats)] : [],
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor:  '#f7f5f1',
         font:  { family: 'system-ui, sans-serif', color: '#1a1a1a', size: 12 },
@@ -433,6 +436,20 @@ function _buildLayout(numColor, showMarg, showReg) {
         xaxis:  { ...axisStyle, title: { text: xCol } },
         yaxis:  { ...axisStyle, title: { text: yCol } },
         margin: { t: 20, r: rNoMarg, b: 56, l: 64 },
+    };
+}
+
+function _buildStatsAnnotation(stats) {
+    const { n, pearson, spearman } = stats;
+    const fmt = v => (v == null ? 'n/a' : v.toFixed(3));
+    return {
+        xref: 'x domain', yref: 'y domain',
+        x: 0.02, y: 0.98, xanchor: 'left', yanchor: 'top',
+        text: `Pearson r = ${fmt(pearson)}<br>Spearman ρ = ${fmt(spearman)}<br>n = ${n}`,
+        align: 'left', showarrow: false,
+        font: { size: 11, color: '#1a1a1a' },
+        bgcolor: 'rgba(255,255,255,0.85)',
+        bordercolor: '#ddd', borderwidth: 1, borderpad: 5,
     };
 }
 
@@ -557,6 +574,47 @@ function _computeRegression(xs, ys) {
     const ssRes     = ys.reduce((s, y, i) => s + (y - (slope * xs[i] + intercept)) ** 2, 0);
     const ssTot     = ys.reduce((s, y)    => s + (y - my) ** 2, 0);
     return { slope, intercept, r2: ssTot > 0 ? 1 - ssRes / ssTot : 0 };
+}
+
+// ================================================================
+// Correlation
+// ================================================================
+
+function _computeCorrelations(xs, ys) {
+    return {
+        n:        xs.length,
+        pearson:  _pearson(xs, ys),
+        spearman: _pearson(_rank(xs), _rank(ys)),
+    };
+}
+
+function _pearson(xs, ys) {
+    const n = xs.length;
+    if (n < 2) return null;
+    const mx = xs.reduce((a, b) => a + b, 0) / n;
+    const my = ys.reduce((a, b) => a + b, 0) / n;
+    let num = 0, dx = 0, dy = 0;
+    for (let i = 0; i < n; i++) {
+        const a = xs[i] - mx, b = ys[i] - my;
+        num += a * b; dx += a * a; dy += b * b;
+    }
+    const den = Math.sqrt(dx * dy);
+    return den > 0 ? num / den : null;   // null when a variable is constant
+}
+
+// Fractional ranks, ties averaged (so Spearman matches scipy's tie handling).
+function _rank(vals) {
+    const order  = vals.map((v, i) => i).sort((a, b) => vals[a] - vals[b]);
+    const ranks  = new Array(vals.length);
+    let i = 0;
+    while (i < order.length) {
+        let j = i;
+        while (j + 1 < order.length && vals[order[j + 1]] === vals[order[i]]) j++;
+        const avg = (i + j) / 2 + 1;                 // 1-based average rank
+        for (let k = i; k <= j; k++) ranks[order[k]] = avg;
+        i = j + 1;
+    }
+    return ranks;
 }
 
 // ================================================================
