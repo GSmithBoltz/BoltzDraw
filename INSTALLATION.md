@@ -176,3 +176,5 @@ lsof -ti :4400 | xargs kill -9
 | AutoGrid4 | Computes OA/HD/SW/OW/HW energy maps around the binding site |
 | WaterKit | Places TIP3P water molecules using AutoDock energy scoring |
 | Flask | Serves the static app + exposes the `/hydrate` endpoint |
+| PLIP | Profiles protein–ligand contacts for the `/plip` endpoint |
+| gemmi | Parses mmCIF/PDB structures |

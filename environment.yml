@@ -9,6 +9,9 @@ dependencies:
   - openbabel
   - autogrid
   - rdkit
+  # PDBFixer prep imports openmm.app directly, so pin it
+  # explicitly rather than relying on it arriving as a pdbfixer dependency.
+  - openmm
   - pip
   - pip:
       - flask
@@ -16,6 +19,8 @@ dependencies:
       - meeko
       - gemmi
       - waterkit @ git+https://github.com/forlilab/waterkit.git
+      # PLIP: protein–ligand contact profiling, used by server.py /plip route.
+      - plip
       # ADME (Boltz cloud) — used by server.py /adme route. TO-CONFIRM package name/URL.
       - boltz_api
       # Local pKa (UnipKa) — used by server.py /pka route. TO-CONFIRM package name/URL.
