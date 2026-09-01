@@ -359,3 +359,136 @@ function _loadMolstarScript() {
 export function ensureMolstarLoaded() {
     return _loadMolstarScript();
 }
+
+/* ================================================================
+   RESIDUE SELECTION — highlight and pick without the query API
+
+   The slim viewer bundle we load exposes only `Viewer` on the global. There is
+   no MolScriptBuilder, Script, StructureElement, StructureProperties or
+   StructureSelection, and merely *touching* `molstar.lib.structure` throws hard
+   enough to kill the executing script. Code written against Mol*'s documented
+   query API therefore fails at runtime here — silently, if it sits in a bare
+   catch, which is how two features shipped broken and unnoticed.
+
+   So we build the element loci from the loaded Structure's own runtime data.
+   Everything below is plain property access on live plugin objects, which is
+   exactly why it survives the bundle's missing exports.
+
+   A StructureElement.Loci is `{kind, structure, elements: [{unit, indices}]}`
+   where `indices` are unit-local positions into `unit.elements`, sorted.
+================================================================ */
+
+/**
+ * Select (and optionally focus) a set of residues given by author numbering.
+ *
+ * @param {object} plugin      a Viewer's `.plugin`
+ * @param {Object<string, number[]>} byChain  chain id -> author residue numbers
+ * @param {{focus?: boolean}} [opts]
+ * @returns {boolean} whether a selection was applied
+ */
+export function selectResidues(plugin, byChain, opts = {}) {
+    if (!plugin) return false;
+    try {
+        const loci = residuesToLoci(plugin, byChain);
+        const sel = plugin.managers.structure.selection;
+        sel.clear();
+        if (!loci) return false;
+        sel.fromLoci('set', loci);
+        if (opts.focus) focusLoci(plugin, loci);
+        return true;
+    } catch (err) {
+        // Highlighting is cosmetic — the sequence track and panel remain
+        // authoritative — but a silent failure is how this rots unnoticed.
+        console.warn('[Molstar] residue selection failed:', err);
+        return false;
+    }
+}
+
+/** Build an element loci for `byChain` (chain id -> author residue numbers). */
+export function residuesToLoci(plugin, byChain) {
+    const structRef = plugin.managers.structure.hierarchy.current.structures[0];
+    const structure = structRef?.cell?.obj?.data;
+    if (!structure?.units) return null;
+
+    const want = new Set();
+    for (const [chain, nums] of Object.entries(byChain || {})) {
+        for (const n of nums || []) want.add(`${chain}:${n}`);
+    }
+    if (!want.size) return null;
+
+    const elements = [];
+    for (const unit of structure.units) {
+        const local = _unitMatches(unit, want);
+        if (local.length) elements.push({ unit, indices: new Int32Array(local) });
+    }
+    return elements.length ? { kind: 'element-loci', structure, elements } : null;
+}
+
+/** Unit-local element indices whose residue is in `want` ("chain:authSeqId"). */
+function _unitMatches(unit, want) {
+    const h = unit.model?.atomicHierarchy;
+    if (!h) return [];
+    const chainOf = h.chainAtomSegments.index;
+    const resOf   = h.residueAtomSegments.index;
+    const asym    = h.chains.auth_asym_id;
+    const seq     = h.residues.auth_seq_id;
+    const els     = unit.elements;
+
+    const out = [];
+    for (let i = 0; i < els.length; i++) {
+        const e = els[i];
+        if (want.has(`${asym.value(chainOf[e])}:${seq.value(resOf[e])}`)) out.push(i);
+    }
+    return out;
+}
+
+// Mol* packs an Interval as an IntTuple: two int32s sharing one float64. A
+// click on a residue yields that form (its atoms are contiguous), so reading it
+// is not optional. This mirrors mol-data/int/tuple.ts exactly.
+const _tupleI32 = new Int32Array(2);
+const _tupleF64 = new Float64Array(_tupleI32.buffer);
+
+/** First element of an OrderedSet — sorted array or packed Interval. */
+function _firstOf(orderedSet) {
+    if (orderedSet == null) return null;
+    if (typeof orderedSet === 'number') {          // Interval: [start, end)
+        _tupleF64[0] = orderedSet;
+        const start = _tupleI32[0], end = _tupleI32[1];
+        return end > start ? start : null;
+    }
+    return orderedSet.length ? orderedSet[0] : null;
+}
+
+/** Chain + author residue number under a clicked loci, or null. */
+export function residueAtLoci(loci) {
+    if (!loci || loci.kind !== 'element-loci') return null;
+    const el = loci.elements?.[0];
+    if (!el?.unit) return null;
+    const h = el.unit.model?.atomicHierarchy;
+    if (!h) return null;
+
+    const local = _firstOf(el.indices);
+    if (local == null) return null;
+
+    const e = el.unit.elements[local];
+    if (e == null) return null;
+    return {
+        chain: h.chains.auth_asym_id.value(h.chainAtomSegments.index[e]),
+        auth:  h.residues.auth_seq_id.value(h.residueAtomSegments.index[e]),
+    };
+}
+
+/** Point the camera at a loci. The camera manager's method name has moved
+ *  around across Mol* versions, so try what 5.7.0 offers and fall back to the
+ *  structure-focus manager, which drives the camera as a side effect. */
+export function focusLoci(plugin, loci) {
+    if (!plugin || !loci) return;
+    const cam = plugin.managers.camera;
+    try {
+        if (typeof cam?.focusLoci === 'function') { cam.focusLoci(loci); return; }
+        if (typeof cam?.focusSpheres === 'function') { cam.focusSpheres([loci]); return; }
+        plugin.managers.structure.focus?.setFromLoci(loci);
+    } catch (err) {
+        console.warn('[Molstar] camera focus unavailable:', err);
+    }
+}
