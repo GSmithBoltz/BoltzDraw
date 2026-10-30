@@ -2,13 +2,17 @@
  * boltztable.js
  * BoltzTable — a DataWarrior-style structure table.
  *
- * Loads a CSV/TSV, renders every row with its 2D structure drawn from SMILES,
- * and lets you narrow the set with live filters that compose: numeric ranges,
- * category picks, text search, substructure (SMARTS) and Tanimoto similarity.
+ * Loads a CSV/TSV or an SD file (either may be gzipped), renders every row with
+ * its 2D structure drawn from SMILES, and lets you narrow the set with live
+ * filters that compose: numeric ranges, category picks, text search,
+ * substructure (SMARTS) and Tanimoto similarity. An SD file's mol blocks are
+ * converted to SMILES on load; its data items become ordinary columns.
  *
  * The table is virtualized — only the rows in view are in the DOM — so a
  * 50k-row file scrolls at the same speed as a 500-row one.
  */
+
+import { parseSdf } from './fileparse.js';
 
 // ----------------------------------------------------------------
 // State
@@ -44,6 +48,14 @@ let filters = new Map();         // colName -> filter state
 const renderCols = new Map();
 
 let originalColOrder = [];       // file order, so a mangled layout can be reset
+
+// When the table came from an SD file: each row's mol block as read, the
+// column its SMILES went to, and the columns made up on load (title, SMILES).
+// SDF export writes those mol blocks back untouched — 3D coordinates and all —
+// and leaves the made-up columns out, so a filtered file round-trips cleanly.
+let molblocks    = [];
+let sdfSmilesCol = '';
+let sdfMadeCols  = new Set();
 let structFilter = {
     smarts: '', qmol: null, qmolErr: '',
     simSmiles: '', simFp: null, simCutoff: 0.7, simErr: '',
@@ -70,6 +82,9 @@ const MAX_CATEGORIES = 60;
 const OVERSCAN   = 6;
 const HIST_BINS  = 24;
 const CHECK_W    = 34;           // checkbox gutter width, px
+// SD records converted between yields to the browser while loading.
+const SDF_CHUNK  = 500;
+const MOLBLOCK_OPTS = JSON.stringify({ removeHs: true });
 
 // ----------------------------------------------------------------
 // Init
@@ -202,9 +217,9 @@ function _renderEmptyState() {
             <line x1="15" y1="9" x2="15" y2="20"/>
             <line x1="2.5" y1="14.5" x2="21.5" y2="14.5"/>
         </svg>
-        <p>Upload a CSV or TSV to browse it as a structure table.<br>
-           Structures are drawn from a SMILES column; every other<br>
-           column becomes a live filter.</p>
+        <p>Upload a CSV, TSV or SDF to browse it as a structure table.<br>
+           Structures are drawn from a SMILES column or the SD mol blocks;<br>
+           every other column becomes a live filter.</p>
     `;
 }
 
@@ -212,44 +227,145 @@ function _renderEmptyState() {
 // File load + column typing
 // ----------------------------------------------------------------
 
-function _handleFile(file) {
+async function _handleFile(file) {
     _setStatus('Parsing…', 'loading');
     _resetAll();
 
-    Papa.parse(file, {
-        header: true,
-        skipEmptyLines: true,
-        delimiter: /\.(tsv|txt)$/i.test(file.name) ? '\t' : '',
-        complete(res) {
-            rows     = res.data;
-            colNames = (res.meta.fields || []).filter(Boolean);
+    let table;
+    try {
+        table = await _readTable(file, msg => _setStatus(msg, 'loading'));
+    } catch (err) {
+        _setStatus('Parse error: ' + err.message, 'error');
+        return;
+    }
 
-            if (!rows.length || !colNames.length) {
-                _setStatus('No data rows found in that file', 'error');
-                return;
-            }
+    rows         = table.rows;
+    colNames     = table.fields;
+    molblocks    = table.molblocks || [];
+    sdfSmilesCol = table.smilesCol || '';
+    sdfMadeCols  = new Set(table.madeCols || []);
 
-            originalColOrder = colNames.slice();
-            _typeColumns();
-            _populateSelects();
-            _autoDetect();
-            _buildFilters();
-            _buildStructureFilters();
-            _buildColumnList();
-            _rebuildHeader();
-            _applyFilters();
+    if (!rows.length || !colNames.length) {
+        _setStatus('No data rows found in that file', 'error');
+        return;
+    }
 
-            document.getElementById('bt-structure-config').classList.remove('hidden');
-            document.getElementById('bt-panel-tabs').classList.remove('hidden');
-            document.getElementById('bt-toolbar').classList.remove('hidden');
-            document.getElementById('bt-table-wrap').classList.remove('hidden');
-            document.getElementById('bt-empty-state').classList.add('hidden');
-            _setPanelTab('filters');
+    originalColOrder = colNames.slice();
+    _typeColumns();
+    _populateSelects();
+    _autoDetect();
+    // An SD file's structures live in the column we wrote them to, whatever a
+    // data item of its own happens to be called.
+    if (table.smilesCol) {
+        _setStructureColumn(table.smilesCol);
+        document.getElementById('bt-smiles-col').value = table.smilesCol;
+    }
+    _buildFilters();
+    _buildStructureFilters();
+    _buildColumnList();
+    _rebuildHeader();
+    _applyFilters();
 
-            _setStatus(`${rows.length.toLocaleString()} rows · ${colNames.length} columns`, 'success');
-        },
-        error(err) { _setStatus('Parse error: ' + err.message, 'error'); },
+    document.getElementById('bt-structure-config').classList.remove('hidden');
+    document.getElementById('bt-panel-tabs').classList.remove('hidden');
+    document.getElementById('bt-toolbar').classList.remove('hidden');
+    document.getElementById('bt-table-wrap').classList.remove('hidden');
+    document.getElementById('bt-empty-state').classList.add('hidden');
+    _setPanelTab('filters');
+
+    _setStatus(`${rows.length.toLocaleString()} rows · ${colNames.length} columns${_failedNote(table)}`,
+               'success');
+}
+
+/**
+ * Read a CSV/TSV or SD file, gzipped or not, into { rows, fields }. SD files
+ * also report the column their structures were written to and how many mol
+ * blocks RDKit could not read.
+ */
+async function _readTable(file, onProgress) {
+    const gz   = /\.gz$/i.test(file.name);
+    const name = file.name.replace(/\.gz$/i, '');
+    const src  = gz ? await _gunzip(file) : file;
+
+    if (/\.(sdf|sd)$/i.test(name)) {
+        return _sdfToTable(typeof src === 'string' ? src : await src.text(), onProgress);
+    }
+
+    return new Promise((resolve, reject) => {
+        Papa.parse(src, {
+            header: true,
+            skipEmptyLines: true,
+            delimiter: /\.(tsv|txt)$/i.test(name) ? '\t' : '',
+            complete: res => resolve({ rows: res.data, fields: (res.meta.fields || []).filter(Boolean) }),
+            error: reject,
+        });
     });
+}
+
+function _gunzip(file) {
+    return new Response(file.stream().pipeThrough(new DecompressionStream('gzip'))).text();
+}
+
+/**
+ * Lay an SD file out as table rows: the title line, the SMILES read from the
+ * mol block, then every data item in file order. A record RDKit can't read
+ * keeps its row and data with a blank SMILES, rather than vanishing.
+ */
+async function _sdfToTable(text, onProgress) {
+    const { records, fields } = parseSdf(text);
+
+    // Our two columns lead, and step aside from any data item already using
+    // the name — compared case-blind, so "Name" and "NAME" don't sit together.
+    const taken = new Set(fields.map(f => f.toLowerCase()));
+    const free = base => {
+        let n = base, k = 2;
+        while (taken.has(n.toLowerCase())) n = `${base} (${k++})`;
+        taken.add(n.toLowerCase());
+        return n;
+    };
+    const titleCol  = records.some(r => r.title) ? free('Name') : '';
+    const smilesCol = free('SMILES');
+
+    const out = [];
+    let failed = 0;
+    for (let i = 0; i < records.length; i++) {
+        const r = records[i];
+        const row = {};
+        if (titleCol) row[titleCol] = r.title;
+        row[smilesCol] = _molblockToSmiles(r.molblock);
+        if (!row[smilesCol]) failed++;
+        for (const f of fields) row[f] = r.data[f] ?? '';
+        out.push(row);
+
+        if (i % SDF_CHUNK === SDF_CHUNK - 1) {
+            onProgress(`Reading structures ${(i + 1).toLocaleString()} / ${records.length.toLocaleString()}…`);
+            await _yield();
+        }
+    }
+
+    return {
+        rows: out,
+        fields: [titleCol, smilesCol, ...fields].filter(Boolean),
+        smilesCol, failed,
+        molblocks: records.map(r => r.molblock),
+        madeCols:  [titleCol, smilesCol].filter(Boolean),
+    };
+}
+
+function _molblockToSmiles(molblock) {
+    let mol;
+    try {
+        // Explicit hydrogens off, so a 3D pose reads as the same SMILES its
+        // 2D drawing would. Stereo is still perceived from the coordinates.
+        mol = _RDKit.get_mol(molblock, MOLBLOCK_OPTS);
+        return mol && mol.is_valid() ? mol.get_smiles() : '';
+    } catch { return ''; }
+    finally { if (mol) mol.delete(); }
+}
+
+function _failedNote(table) {
+    if (!table.failed) return '';
+    return ` · ${table.failed.toLocaleString()} structure${table.failed === 1 ? '' : 's'} unreadable (blank SMILES)`;
 }
 
 function _resetAll() {
@@ -259,6 +375,7 @@ function _resetAll() {
     activeRow = null; lastClickedRow = null;
     sortCol = null; sortDir = 1;
     smilesCol = ''; idCol = ''; searchTerm = '';
+    molblocks = []; sdfSmilesCol = ''; sdfMadeCols = new Set();
     svgCache.clear(); fpCaches.clear(); substructCache.clear();
     fpsReady = false;
     structFilter = { smarts: '', qmol: null, qmolErr: '',
@@ -1648,49 +1765,51 @@ function _scrollToRow(rowIdx) {
 
 // ---- 2. Cross-file nearest match ----
 
-function _handleRefFile(file) {
+async function _handleRefFile(file) {
     _setAnStatus('bt-ref-status', 'Parsing…', 'loading');
     refFps = null;
-    refName = file.name.replace(/\.(csv|tsv|txt)$/i, '');
+    refName = file.name.replace(/\.gz$/i, '').replace(/\.(csv|tsv|txt|sdf|sd)$/i, '');
 
-    Papa.parse(file, {
-        header: true,
-        skipEmptyLines: true,
-        delimiter: /\.(tsv|txt)$/i.test(file.name) ? '\t' : '',
-        complete(res) {
-            refRows = res.data;
-            refCols = (res.meta.fields || []).filter(Boolean);
-            if (!refRows.length || !refCols.length) {
-                _setAnStatus('bt-ref-status', 'No data rows in that file', 'error');
-                return;
-            }
+    let table;
+    try {
+        table = await _readTable(file, msg => _setAnStatus('bt-ref-status', msg, 'loading'));
+    } catch (err) {
+        _setAnStatus('bt-ref-status', 'Parse error: ' + err.message, 'error');
+        return;
+    }
 
-            const opts = refCols.map(c => `<option value="${_esc(c)}">${_esc(c)}</option>`).join('');
-            document.getElementById('bt-ref-smiles-col').innerHTML = opts;
-            document.getElementById('bt-ref-id-col').innerHTML =
-                '<option value="">— row number —</option>' + opts;
+    refRows = table.rows;
+    refCols = table.fields;
+    if (!refRows.length || !refCols.length) {
+        _setAnStatus('bt-ref-status', 'No data rows in that file', 'error');
+        return;
+    }
 
-            const lower = refCols.map(c => c.toLowerCase());
-            // Exact header match first, then a substring sweep — reference files
-            // routinely name the key column "RefID", "Cmpd Name" and the like.
-            const pick = (...keys) => {
-                for (const k of keys) { const i = lower.indexOf(k); if (i !== -1) return refCols[i]; }
-                for (const k of keys) {
-                    const i = lower.findIndex(c => c.includes(k));
-                    if (i !== -1) return refCols[i];
-                }
-                return '';
-            };
-            refSmilesCol = pick('smiles', 'smi', 'canonical_smiles', 'structure', 'molecule', 'mol') || refCols[0];
-            refIdCol     = pick('id', 'name', 'title') || '';
-            document.getElementById('bt-ref-smiles-col').value = refSmilesCol;
-            document.getElementById('bt-ref-id-col').value     = refIdCol;
+    const opts = refCols.map(c => `<option value="${_esc(c)}">${_esc(c)}</option>`).join('');
+    document.getElementById('bt-ref-smiles-col').innerHTML = opts;
+    document.getElementById('bt-ref-id-col').innerHTML =
+        '<option value="">— row number —</option>' + opts;
 
-            document.getElementById('bt-ref-config').classList.remove('hidden');
-            _setAnStatus('bt-ref-status', `${refRows.length.toLocaleString()} reference molecules loaded`, 'success');
-        },
-        error(err) { _setAnStatus('bt-ref-status', 'Parse error: ' + err.message, 'error'); },
-    });
+    const lower = refCols.map(c => c.toLowerCase());
+    // Exact header match first, then a substring sweep — reference files
+    // routinely name the key column "RefID", "Cmpd Name" and the like.
+    const pick = (...keys) => {
+        for (const k of keys) { const i = lower.indexOf(k); if (i !== -1) return refCols[i]; }
+        for (const k of keys) {
+            const i = lower.findIndex(c => c.includes(k));
+            if (i !== -1) return refCols[i];
+        }
+        return '';
+    };
+    refSmilesCol = table.smilesCol
+        || pick('smiles', 'smi', 'canonical_smiles', 'structure', 'molecule', 'mol') || refCols[0];
+    refIdCol     = pick('id', 'name', 'title') || '';
+    document.getElementById('bt-ref-smiles-col').value = refSmilesCol;
+    document.getElementById('bt-ref-id-col').value     = refIdCol;
+
+    document.getElementById('bt-ref-config').classList.remove('hidden');
+    _setAnStatus('bt-ref-status',
+        `${refRows.length.toLocaleString()} reference molecules loaded${_failedNote(table)}`, 'success');
 }
 
 function _buildRefFps(kind) {
@@ -1857,17 +1976,18 @@ function _setAnStatus(id, msg, type) {
 // ----------------------------------------------------------------
 
 function _runExport(act) {
-    const subset = act === 'csv-selected'
-        ? order.filter(i => selected.has(i))
-        : order;
+    const sel = act.endsWith('-selected');
+    const subset = sel ? order.filter(i => selected.has(i)) : order;
 
     if (!subset.length) {
-        _setStatus(act === 'csv-selected' ? 'Nothing selected' : 'Nothing to export', 'error');
+        _setStatus(sel ? 'Nothing selected' : 'Nothing to export', 'error');
         return;
     }
 
     if (act === 'csv-filtered' || act === 'csv-selected') {
-        _download(_toCsv(subset), act === 'csv-selected' ? 'selected.csv' : 'filtered.csv');
+        _download(_toCsv(subset), sel ? 'selected.csv' : 'filtered.csv');
+    } else if (act === 'sdf-filtered' || act === 'sdf-selected') {
+        _exportSdf(subset, sel ? 'selected.sdf' : 'filtered.sdf');
     } else if (act === 'copy-smiles') {
         if (!smilesCol) { _setStatus('No structure column set', 'error'); return; }
         _copy(subset.map(i => String(rows[i][smilesCol] ?? '')).filter(Boolean).join('\n'),
@@ -1893,8 +2013,77 @@ function _toCsv(idxs) {
     return lines.join('\n');
 }
 
-function _download(text, filename) {
-    const url = URL.createObjectURL(new Blob([text], { type: 'text/csv' }));
+/**
+ * One SD record per row, data items in column order. Rows read from an SD file
+ * keep their own mol block, unless the structure column has been pointed
+ * elsewhere; every other row is drawn fresh from its SMILES, titled with its ID.
+ * A row with no readable structure is written as an empty molecule rather than
+ * dropped, so its data still travels.
+ */
+async function _exportSdf(idxs, filename) {
+    if (!smilesCol) { _setStatus('No structure column set', 'error'); return; }
+
+    const fromFile = smilesCol === sdfSmilesCol && molblocks.length === rows.length;
+    const cols = colNames.filter(c => !_isDrawOnly(c) && !sdfMadeCols.has(c));
+    const tags = cols.map(c => `> <${c.replace(/[<>]/g, '')}>\n`);
+
+    const parts = [];
+    let empty = 0;
+    for (let n = 0; n < idxs.length; n++) {
+        const i = idxs[n];
+        let mb = fromFile ? molblocks[i] : '';
+        if (!mb) {
+            const title = idCol ? String(rows[i][idCol] ?? '') : '';
+            mb = _molblockFromSmiles(String(rows[i][smilesCol] ?? ''), title);
+            if (!mb) { mb = _emptyMolblock(title); empty++; }
+        }
+
+        let rec = mb.replace(/\s+$/, '') + '\n';
+        for (let k = 0; k < cols.length; k++) rec += tags[k] + _sdValue(rows[i][cols[k]]) + '\n\n';
+        parts.push(rec + '$$$$\n');
+
+        if (n % SDF_CHUNK === SDF_CHUNK - 1) {
+            _setStatus(`Writing SDF ${(n + 1).toLocaleString()} / ${idxs.length.toLocaleString()}…`, 'loading');
+            await _yield();
+        }
+    }
+
+    _download(parts.join(''), filename, 'chemical/x-mdl-sdfile');
+    if (empty) {
+        const s = empty === 1 ? '' : 's';
+        _setStatus(`Downloaded ${filename} · ${empty.toLocaleString()} row${s} with no readable ` +
+                   `structure written as empty molecule${s}`, 'success');
+    }
+}
+
+function _molblockFromSmiles(smiles, title) {
+    let mol, mb = '';
+    try {
+        mol = smiles ? _RDKit.get_mol(smiles) : null;
+        if (mol && mol.is_valid()) mb = mol.get_molblock();
+    } catch { /* caller writes an empty molecule */ }
+    finally { if (mol) mol.delete(); }
+    // Line one of a mol block is its title; RDKit leaves it blank.
+    return mb ? _sdTitle(title) + mb.slice(mb.indexOf('\n')) : '';
+}
+
+function _emptyMolblock(title) {
+    return `${_sdTitle(title)}\n  BoltzDraw\n\n  0  0  0  0  0  0  0  0  0  0999 V2000\nM  END`;
+}
+
+/** The title line holds one line of at most 80 characters. */
+function _sdTitle(s) {
+    return String(s).replace(/[\r\n]+/g, ' ').slice(0, 80);
+}
+
+/** A blank line ends an SD value, so any inside one are dropped. */
+function _sdValue(v) {
+    if (v === undefined || v === null) return '';
+    return String(v).split(/\r?\n/).filter(l => l.trim()).join('\n');
+}
+
+function _download(text, filename, type = 'text/csv') {
+    const url = URL.createObjectURL(new Blob([text], { type }));
     const a = document.createElement('a');
     a.href = url; a.download = filename;
     document.body.appendChild(a); a.click(); a.remove();

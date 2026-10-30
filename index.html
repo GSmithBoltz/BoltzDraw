@@ -405,6 +405,8 @@
                         <div class="bt-menu hidden" id="bt-export-menu">
                             <button data-act="csv-filtered">Download filtered CSV</button>
                             <button data-act="csv-selected">Download selected CSV</button>
+                            <button data-act="sdf-filtered">Download filtered SDF</button>
+                            <button data-act="sdf-selected">Download selected SDF</button>
                             <button data-act="copy-smiles">Copy SMILES (filtered)</button>
                             <button data-act="copy-ids">Copy IDs (filtered)</button>
                             <div class="bt-menu-sep"></div>
@@ -440,9 +442,9 @@
                 <div class="star-section" id="bt-upload-section">
                     <label class="star-label">Data</label>
                     <label class="star-upload-label" for="bt-file-input">
-                        Upload CSV or TSV file
+                        Upload CSV, TSV or SDF file
                     </label>
-                    <input type="file" id="bt-file-input" accept=".csv,.tsv,.txt" style="display:none">
+                    <input type="file" id="bt-file-input" accept=".csv,.tsv,.txt,.sdf,.sd,.gz" style="display:none">
                     <div class="star-status hidden" id="bt-status"></div>
 
                     <div id="bt-structure-config" class="hidden">
@@ -526,9 +528,9 @@
                         <p class="bt-an-hint">For every row, find its most similar molecule in a reference
                            set. The result is written back as sortable, filterable columns.</p>
                         <label class="star-upload-label bt-an-upload" for="bt-ref-file-input">
-                            Upload reference CSV / TSV
+                            Upload reference CSV / TSV / SDF
                         </label>
-                        <input type="file" id="bt-ref-file-input" accept=".csv,.tsv,.txt" style="display:none">
+                        <input type="file" id="bt-ref-file-input" accept=".csv,.tsv,.txt,.sdf,.sd,.gz" style="display:none">
                         <div class="bt-an-status hidden" id="bt-ref-status"></div>
 
                         <div id="bt-ref-config" class="hidden">

@@ -1,9 +1,13 @@
 /**
  * fileparse.js
  *
- * Browser-side parsers for PDB (.pdb) and mmCIF (.cif/.mmcif) files.
+ * Browser-side parsers for PDB (.pdb), mmCIF (.cif/.mmcif) and SD (.sdf) files.
  *
- * Both parsers return:
+ * parseSdf(text) — splits an SD file into records of { title, molblock, data }
+ *   plus the data-item names in file order. It does no chemistry; turning the
+ *   mol blocks into SMILES is left to the caller's RDKit instance.
+ *
+ * The PDB and mmCIF parsers return:
  *   { compIds: string[], smilesMap: Record<string,string> }
  *
  *   compIds  — unique HETATM residue codes (filtered via LIGAND_EXCLUDE)
@@ -58,6 +62,62 @@ export function parseCif(text) {
         compIds:   _extractHetatmCodes(text),
         smilesMap: _extractInlineSmiles(text),
     };
+}
+
+// ----------------------------------------------------------------
+// SD format (.sdf / .sd)
+//
+// Records end at a `$$$$` line. Each holds a mol block (V2000 or V3000, up to
+// `M  END`) followed by data items:
+//
+//   > <pIC50>          header — anything may surround the <name>,
+//   6.2                e.g. `>  <ID>  (1)` or `> 25 <ID>`
+//                      a blank line ends the value; values may span lines
+//
+// Returns { records: [{ title, molblock, data }], fields: string[] }.
+// ----------------------------------------------------------------
+
+export function parseSdf(text) {
+    const records = [];
+    const fields  = [];
+    const seen    = new Set();
+
+    // Consume the `$$$$` line with its newline, so each chunk starts exactly
+    // on its title line — which may itself be blank.
+    for (const chunk of text.split(/^\$\$\$\$[^\r\n]*(?:\r?\n|$)/m)) {
+        if (!chunk.trim()) continue;
+
+        const lines = chunk.split(/\r?\n/);
+        let end = lines.findIndex(l => l.startsWith('M  END'));
+        if (end === -1) end = lines.length - 1;
+
+        const data = {};
+        let key = null, buf = [];
+        const flush = () => {
+            if (key && !(key in data)) {
+                data[key] = buf.join('\n').trim();
+                if (!seen.has(key)) { seen.add(key); fields.push(key); }
+            }
+            key = null; buf = [];
+        };
+
+        for (let i = end + 1; i < lines.length; i++) {
+            const line = lines[i];
+            const head = line.match(/^>[^<]*<([^>]*)>/);
+            if (head)               { flush(); key = head[1].trim(); continue; }
+            if (key === null)       continue;
+            if (line.trim() === '') { flush(); continue; }
+            buf.push(line);
+        }
+        flush();
+
+        records.push({
+            title:    lines[0].trim(),
+            molblock: lines.slice(0, end + 1).join('\n'),
+            data,
+        });
+    }
+    return { records, fields };
 }
 
 // ----------------------------------------------------------------
