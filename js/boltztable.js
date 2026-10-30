@@ -287,7 +287,10 @@ async function _readTable(file, onProgress) {
     const name = file.name.replace(/\.gz$/i, '');
     const src  = gz ? await _gunzip(file) : file;
 
-    if (/\.(sdf|sd)$/i.test(name)) {
+    // Trust the contents over the name: SD files turn up as .txt, .mol, or
+    // with a second extension a file browser hides.
+    const head = typeof src === 'string' ? src.slice(0, 4096) : await src.slice(0, 4096).text();
+    if (/\.(sdf|sd|mol)$/i.test(name) || _looksLikeSdf(head)) {
         return _sdfToTable(typeof src === 'string' ? src : await src.text(), onProgress);
     }
 
@@ -304,6 +307,12 @@ async function _readTable(file, onProgress) {
 
 function _gunzip(file) {
     return new Response(file.stream().pipeThrough(new DecompressionStream('gzip'))).text();
+}
+
+/** A mol block's fourth line is its counts line, ending in V2000 or V3000. */
+function _looksLikeSdf(head) {
+    const counts = head.split(/\r?\n/, 4)[3];
+    return counts !== undefined && /V[23]000\s*$/.test(counts);
 }
 
 /**
