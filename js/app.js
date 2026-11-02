@@ -236,7 +236,7 @@ async function switchMode(mode) {
     });
 
     // Hide shared properties panel in modes that have their own right panel
-    const hidePanel = mode === 'space' || mode === 'plot' || mode === 'table';
+    const hidePanel = mode === 'space' || mode === 'plot' || mode === 'table' || !!cfg.ownPanel;
     document.getElementById('properties-panel').classList.toggle('hidden', hidePanel);
     document.getElementById('panel-toggle').classList.toggle('hidden', hidePanel);
 
@@ -298,6 +298,15 @@ async function switchMode(mode) {
         }
     }
 
+    // Modes added through registerMode() run their own init on every switch
+    if (cfg.onEnter) {
+        try {
+            await cfg.onEnter({ RDKit, molecules: currentMolecules, loadSmiles, switchMode });
+        } catch (err) {
+            console.error(`${mode} init failed:`, err);
+        }
+    }
+
     // Lazy-init Molstar on first switch to BoltzStar
     if (mode === 'star' && !molstarInitted) {
         molstarInitted = true;
@@ -335,6 +344,22 @@ document.getElementById('btn-space').addEventListener('click', () => switchMode(
 document.getElementById('btn-plot').addEventListener('click',  () => switchMode('plot'));
 document.getElementById('btn-table').addEventListener('click', () => switchMode('table'));
 
+/**
+ * Add a mode at runtime. Used by the optional, gitignored local/ folder, which
+ * server.py loads when present. cfg takes the MODES fields plus `label`
+ * ([brand, product] for the header button) and optionally `before` (id of the
+ * button to insert ahead of), `ownPanel` and `onEnter(ctx)`.
+ */
+export function registerMode(key, cfg) {
+    MODES[key] = cfg;
+    const btn = document.createElement('button');
+    btn.className = 'mode-btn';
+    btn.id = cfg.btnId;
+    btn.innerHTML = `<span class="btn-brand">${cfg.label[0]}</span><span class="btn-product">${cfg.label[1]}</span>`;
+    btn.addEventListener('click', () => switchMode(key));
+    const nav = document.querySelector('.app-switcher');
+    nav.insertBefore(btn, (cfg.before && document.getElementById(cfg.before)) || null);
+}
 
 
 // ----------------------------------------------------------------

@@ -6,10 +6,12 @@ Serves all static files (replaces SimpleHTTPRequestHandler) and exposes:
 """
 
 import os
+import sys
 import traceback
 from flask import Flask, request, jsonify, send_from_directory
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
+LOCAL_DIR = os.path.join(BASE_DIR, 'local')   # optional, gitignored
 app = Flask(__name__, static_folder=BASE_DIR)
 
 
@@ -19,6 +21,11 @@ app = Flask(__name__, static_folder=BASE_DIR)
 
 @app.route('/')
 def index():
+    # An optional local/ folder can add its own modes to the app
+    if os.path.exists(os.path.join(LOCAL_DIR, 'modules.js')):
+        with open(os.path.join(BASE_DIR, 'index.html'), encoding='utf-8') as f:
+            html = f.read()
+        return html.replace('</body>', '<script type="module" src="local/modules.js"></script>\n</body>')
     return send_from_directory(BASE_DIR, 'index.html')
 
 @app.route('/<path:path>')
@@ -250,6 +257,16 @@ def pka():
     except Exception as e:
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ----------------------------------------------------------------
+# Optional local-only routes (gitignored local/ folder)
+# ----------------------------------------------------------------
+
+if os.path.exists(os.path.join(LOCAL_DIR, 'local_routes.py')):
+    sys.path.insert(0, LOCAL_DIR)
+    import local_routes
+    app.register_blueprint(local_routes.bp)
 
 
 # ----------------------------------------------------------------
