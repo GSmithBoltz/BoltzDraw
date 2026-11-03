@@ -177,4 +177,5 @@ lsof -ti :4400 | xargs kill -9
 | WaterKit | Places TIP3P water molecules using AutoDock energy scoring |
 | Flask | Serves the static app + exposes the `/hydrate` endpoint |
 | PLIP | Profiles protein–ligand contacts for the `/plip` endpoint |
+| ProLIF + MDAnalysis | Interaction fingerprint for one ligand, for the `/prolif` endpoint |
 | gemmi | Parses mmCIF/PDB structures |

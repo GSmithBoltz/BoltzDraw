@@ -2,7 +2,9 @@
 BoltzStar backend server.
 
 Serves all static files (replaces SimpleHTTPRequestHandler) and exposes:
-    POST /hydrate   — PDBFixer + geometric water placement
+    POST /hydrate   PDBFixer + geometric water placement
+    POST /plip      PLIP interaction profile, every binding site
+    POST /prolif    ProLIF interaction fingerprint, one ligand
 """
 
 import os
@@ -91,10 +93,50 @@ def plip():
 
     try:
         result = run_plip(input_data, fmt)
+        # PLIP profiles every site; the requested ligand is echoed so the
+        # caller can pick its site out of 'sites'
+        result['requested_ligand'] = _ligand_header()
         return jsonify(result)
     except Exception as e:
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+
+# ----------------------------------------------------------------
+# ProLIF fingerprint endpoint
+# ----------------------------------------------------------------
+
+@app.route('/prolif', methods=['POST'])
+def prolif():
+    from prolif_analysis import run_prolif
+
+    input_data = request.get_data(as_text=True)
+    filename   = request.headers.get('X-Filename', 'structure.cif')
+    fmt        = 'pdb' if filename.lower().endswith('.pdb') else 'mmcif'
+
+    if not input_data.strip():
+        return jsonify({'error': 'Empty request body'}), 400
+
+    # Optional X-Smiles sets the ligand's bond orders; without it they are
+    # perceived from the coordinates, which predicted poses carry no H for
+    smiles = (request.headers.get('X-Smiles') or '').strip() or None
+
+    try:
+        result = run_prolif(input_data, fmt, _ligand_header(), smiles)
+        return jsonify(result)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+def _ligand_header():
+    """Optional X-Ligand header, 'RES:CHAIN:NUM', as a dict (or None)."""
+    raw = (request.headers.get('X-Ligand') or '').strip()
+    parts = raw.split(':')
+    if len(parts) != 3 or not all(parts):
+        return None
+    resnr = int(parts[2]) if parts[2].lstrip('-').isdigit() else parts[2]
+    return {'resname': parts[0], 'chain': parts[1], 'resnr': resnr}
 
 
 # ----------------------------------------------------------------

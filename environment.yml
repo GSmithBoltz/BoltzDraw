@@ -21,6 +21,8 @@ dependencies:
       - waterkit @ git+https://github.com/forlilab/waterkit.git
       # PLIP: protein–ligand contact profiling, used by server.py /plip route.
       - plip
+      # ProLIF: interaction fingerprints, used by server.py /prolif route (pulls in MDAnalysis).
+      - prolif
       # ADME (Boltz cloud) — used by server.py /adme route. TO-CONFIRM package name/URL.
       - boltz_api
       # Local pKa (UnipKa) — used by server.py /pka route. TO-CONFIRM package name/URL.
