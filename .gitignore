@@ -18,6 +18,7 @@ __pycache__/
 vendor/waterkit-biotite/.venv/
 vendor/waterkit-biotite/.sw_cache/
 vendor/waterkit-biotite/**/__pycache__/
+server.log
 
 # Local-only modules, never published (server.py loads them when present)
 local/
