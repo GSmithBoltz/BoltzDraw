@@ -15,6 +15,7 @@
     <link rel="stylesheet" href="css/boltzplot.css">
     <link rel="stylesheet" href="css/boltztable.css">
     <link rel="stylesheet" href="css/boltztriage.css">
+    <link rel="stylesheet" href="css/boltzcontacts.css">
 </head>
 <body>
 
@@ -45,6 +46,9 @@
             </button>
             <button class="mode-btn" id="btn-triage">
                 <span class="btn-brand">Boltz</span><span class="btn-product">Triage</span>
+            </button>
+            <button class="mode-btn" id="btn-contacts">
+                <span class="btn-brand">Boltz</span><span class="btn-product">Contacts</span>
             </button>
         </nav>
         <div class="header-divider"></div>
@@ -660,6 +664,88 @@
                     </div>
                 </div>
             </div>
+        </div>
+
+        <!-- BoltzContacts: PLIP / ProLIF interaction profiling -->
+        <div id="boltzcontacts-container" class="hidden">
+            <div id="bc-stage">
+                <div id="bc-viewport"></div>
+                <div id="bc-legend"></div>
+                <div id="bc-empty">
+                    <h1>Protein–ligand contacts</h1>
+                    <p>Load a complex, or a folder's worth of Boltz poses, and see the interactions PLIP and
+                       ProLIF call, drawn in 3D. It runs in the browser; with the local server running you
+                       can switch to the real PLIP and ProLIF.</p>
+                    <label class="bc-drop">
+                        <input type="file" id="bc-file" accept=".cif,.mmcif,.pdb,.ent" multiple hidden>
+                        <strong>Choose structures</strong> or drop them here
+                        <span>mmCIF or PDB · one complex per file · several files for a set of poses</span>
+                    </label>
+                    <div class="bc-fetch">
+                        <input id="bc-pdbid" placeholder="PDB ID" maxlength="4" spellcheck="false">
+                        <button id="bc-fetch-btn">Fetch from RCSB</button>
+                    </div>
+                    <p class="bc-examples">Examples:
+                        <button class="bc-link" data-bc-example="1STP">1STP streptavidin · biotin</button>
+                        <button class="bc-link" data-bc-example="3ERT">3ERT ERα · tamoxifen</button>
+                        <button class="bc-link" data-bc-example="1HSG">1HSG HIV protease · indinavir</button>
+                    </p>
+                </div>
+            </div>
+
+            <aside id="bc-panel">
+                <div id="bc-load-status" class="bc-status" style="display:none"></div>
+                <div id="bc-workspace" class="hidden">
+                    <section class="bc-section">
+                        <div class="bc-section-head">
+                            <h3 id="bc-pose-count">Structures</h3>
+                            <div class="bc-head-actions">
+                                <label class="bc-link">Add<input type="file" id="bc-add-file" accept=".cif,.mmcif,.pdb,.ent" multiple hidden></label>
+                                <button class="bc-link" id="bc-clear">Clear</button>
+                            </div>
+                        </div>
+                        <div id="bc-poses"></div>
+                        <button class="bc-btn hidden" id="bc-run-all">Profile all poses</button>
+                    </section>
+
+                    <section class="bc-section">
+                        <label class="bc-label" for="bc-ligand">Ligand</label>
+                        <select id="bc-ligand"></select>
+                        <div class="bc-toggles">
+                            <div class="bc-seg" role="group" aria-label="Rule set">
+                                <button data-bc-rules="plip" class="active">PLIP</button>
+                                <button data-bc-rules="prolif">ProLIF</button>
+                            </div>
+                            <div class="bc-seg" role="group" aria-label="Engine">
+                                <button data-bc-engine="browser" class="active">In browser</button>
+                                <button data-bc-engine="exact">Exact (server)</button>
+                            </div>
+                        </div>
+                        <p class="bc-note" id="bc-engine-note"></p>
+                        <input id="bc-smiles" class="hidden" spellcheck="false"
+                               placeholder="Ligand SMILES (optional): bond orders for ProLIF, which predicted poses lack">
+                    </section>
+
+                    <section class="bc-section">
+                        <div id="bc-summary"></div>
+                    </section>
+
+                    <section class="bc-section bc-grow">
+                        <div class="bc-tabs">
+                            <button data-bc-tab="interactions" class="active">Interactions</button>
+                            <button data-bc-tab="residues">Residues</button>
+                            <button data-bc-tab="poses">Across poses</button>
+                        </div>
+                        <div id="bc-results"></div>
+                    </section>
+
+                    <section class="bc-section bc-export">
+                        <button class="bc-btn" id="bc-export-jsonl" title="One pose per line, the format BoltzTriage reads">JSONL for Triage</button>
+                        <button class="bc-btn" id="bc-export-csv">CSV</button>
+                        <button class="bc-btn bc-primary" id="bc-send-triage">Send to Triage</button>
+                    </section>
+                </div>
+            </aside>
         </div>
 
         <button class="panel-toggle" id="panel-toggle" title="Toggle Properties Panel">

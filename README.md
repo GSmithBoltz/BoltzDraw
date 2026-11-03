@@ -10,6 +10,7 @@ A browser-based molecular toolkit — draw structures, explore chemical space, a
 | **BoltzStar** | 3D structure viewer (Mol* / Molstar) — load by PDB ID or upload CIF/PDB |
 | **BoltzSpace** | Chemical space explorer — UMAP and t-SNE projections from a CSV of SMILES |
 | **BoltzTriage** | Hit triage from PLIP interaction profiles. Interaction value is read off the PLIP call (polar over hydrophobic); the only choice is which interactions to star as key. Four tiers on two axes — how much of the standard a pose maintains, and whether it adds a new polar interaction — plus off-site and not-assessable, which are not tiers. Works with a bound reference or with none. Ships one demo screen (CRBN allosteric, synthetic poses). See [BoltzTriage-Workflow.md](BoltzTriage-Workflow.md) |
+| **BoltzContacts** | Protein–ligand interactions with PLIP's or ProLIF's rules, drawn as lines in 3D. Runs in the browser, so it works on GitHub Pages: a JavaScript port of the PLIP 3.0 and ProLIF 2.2 rules, with donor hydrogens placed from the geometry when the file has none. With the local server running it can call the real PLIP and ProLIF instead. Load one complex or a set of Boltz poses; the poses tab lines up their fingerprints, and PLIP profiles export as JSONL for BoltzTriage |
 
 ## Analysis panel (BoltzDraw)
 

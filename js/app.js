@@ -215,6 +215,14 @@ const MODES = {
         containerId: 'boltztriage-container',
         btnId:       'btn-triage',
     },
+    contacts: {
+        subtitle:    'Interaction Profiler',
+        panelTitle:  'Contacts',
+        btnClass:    'active-contacts',
+        containerId: 'boltzcontacts-container',
+        btnId:       'btn-contacts',
+        ownPanel:    true,
+    },
 };
 
 let currentMode       = 'draw';
@@ -225,6 +233,7 @@ let boltzSpaceInitted = false;
 let boltzPlotInitted  = false;
 let boltzTableInitted = false;
 let boltzTriageInitted = false;
+let boltzContactsInitted = false;
 
 async function switchMode(mode) {
     if (mode === currentMode) return;
@@ -327,6 +336,20 @@ async function switchMode(mode) {
         }
     }
 
+    // Lazy-init BoltzContacts on first switch; refresh its server gate every time
+    if (mode === 'contacts') {
+        try {
+            const mod = await import('./boltzcontacts.js');
+            if (!boltzContactsInitted) {
+                boltzContactsInitted = true;
+                mod.initBoltzContacts({ backend: () => _backendAvailable, switchMode });
+            }
+            mod.onEnterContacts();
+        } catch (err) {
+            console.error('BoltzContacts init failed:', err);
+        }
+    }
+
     // Lazy-init Molstar on first switch to BoltzStar
     if (mode === 'star' && !molstarInitted) {
         molstarInitted = true;
@@ -364,6 +387,7 @@ document.getElementById('btn-space').addEventListener('click', () => switchMode(
 document.getElementById('btn-plot').addEventListener('click',  () => switchMode('plot'));
 document.getElementById('btn-table').addEventListener('click', () => switchMode('table'));
 document.getElementById('btn-triage').addEventListener('click', () => switchMode('triage'));
+document.getElementById('btn-contacts').addEventListener('click', () => switchMode('contacts'));
 
 /**
  * Add a mode at runtime. Used by the optional, gitignored local/ folder, which
