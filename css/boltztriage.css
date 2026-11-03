@@ -1,0 +1,1108 @@
+/* ================================================================
+   BoltzTriage — hit triage from PLIP interaction profiles
+   Layout: chooser page, then a stepped workspace (rail / body / inspector).
+   Follows the app's conventions; plum accent so the
+   mode pill reads distinctly against the others.
+================================================================ */
+
+:root {
+    --tri-accent:      #8B3A62;
+    --tri-accent-dark: #6f2c4d;
+    --tri-accent-soft: #fbeef4;
+    --tri-accent-line: #e8c6d7;
+
+    --tier-1:  #2f6f4a;
+    --tier-2:  #67826b;
+    --tier-3:  #b4870f;
+    --tier-4:  #8a7f6f;
+    --tier-5:  #a1503f;
+    --tier-na: #9a9690;
+}
+
+.mode-btn.active-triage {
+    background: var(--tri-accent);
+    color: white;
+}
+.mode-btn.active-triage .btn-brand,
+.mode-btn.active-triage .btn-product { color: white; }
+
+#boltztriage-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    background: var(--bg-cream);
+    overflow: hidden;
+}
+#boltztriage-container.hidden { display: none; }
+
+/* ================================================================
+   CHOOSER
+================================================================ */
+
+#tri-chooser {
+    flex: 1;
+    overflow-y: auto;
+    padding: 30px 40px 48px;
+}
+#tri-chooser.hidden { display: none; }
+
+.tri-chooser-head {
+    max-width: 760px;
+    margin: 0 auto 26px;
+    text-align: center;
+}
+.tri-chooser-head h1 {
+    font-size: 25px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+    margin-bottom: 9px;
+}
+.tri-chooser-head p {
+    font-size: 13.5px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+}
+
+.tri-section {
+    max-width: 1080px;
+    margin: 0 auto 26px;
+}
+.tri-section > h2 {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+}
+.tri-section > h2 em {
+    font-style: normal;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+#tri-screens {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 340px));
+    gap: 14px;
+}
+
+.tri-screen-card {
+    text-align: left;
+    background: var(--bg-white);
+    border: 1px solid var(--border);
+    border-radius: 11px;
+    padding: 15px 16px 13px;
+    cursor: pointer;
+    transition: border-color .14s, box-shadow .14s, transform .14s;
+    font: inherit;
+    color: inherit;
+}
+.tri-screen-card:hover {
+    border-color: var(--tri-accent-line);
+    box-shadow: 0 3px 12px rgba(0, 0, 0, .06);
+    transform: translateY(-1px);
+}
+.tri-screen-card.selected {
+    border-color: var(--tri-accent);
+    box-shadow: 0 0 0 1px var(--tri-accent);
+    background: var(--tri-accent-soft);
+}
+.tri-screen-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 7px;
+}
+.tri-screen-target { font-size: 14px; font-weight: 700; }
+.tri-screen-lede {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    margin-bottom: 9px;
+}
+.tri-screen-foot {
+    font-size: 11px;
+    color: var(--text-muted);
+    display: flex;
+    gap: 6px;
+}
+.tri-dot { opacity: .5; }
+
+.tri-badge {
+    font-size: 9.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+.tri-badge-synthetic {
+    background: #fdf2d9;
+    color: #8a6a12;
+    border: 1px solid #ecd9a8;
+}
+
+.tri-upload-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+.tri-drop {
+    flex: 1;
+    min-width: 280px;
+    border: 1.5px dashed var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    background: var(--bg-white);
+    transition: border-color .14s, background .14s;
+}
+.tri-drop:hover { border-color: var(--tri-accent-line); background: var(--tri-accent-soft); }
+.tri-drop code {
+    font-size: 11.5px;
+    background: var(--bg-surface);
+    padding: 1px 4px;
+    border-radius: 3px;
+}
+
+.tri-status {
+    font-size: 12px;
+    padding: 7px 11px;
+    border-radius: 7px;
+    margin-top: 10px;
+}
+.tri-status-ok  { background: var(--green-subtle); color: var(--green-dark); }
+.tri-status-bad { background: #fdeceb; color: var(--alert); }
+
+#tri-arms {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 16px;
+}
+#tri-arms.tri-disabled { opacity: .45; pointer-events: none; }
+
+.tri-arm-card {
+    text-align: left;
+    background: var(--bg-white);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 20px 17px;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    position: relative;
+    transition: border-color .14s, box-shadow .14s, transform .14s;
+}
+.tri-arm-card:hover {
+    border-color: var(--tri-accent);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, .07);
+    transform: translateY(-1px);
+}
+.tri-arm-card.suggested::after {
+    content: 'fits this screen';
+    position: absolute;
+    top: 14px; right: 16px;
+    font-size: 9.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    color: var(--tri-accent);
+    background: var(--tri-accent-soft);
+    border: 1px solid var(--tri-accent-line);
+    padding: 2px 7px;
+    border-radius: 4px;
+}
+.tri-arm-card h2 {
+    font-size: 17px;
+    font-weight: 700;
+    margin-bottom: 7px;
+}
+.tri-arm-card > p {
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--text-secondary);
+    margin-bottom: 11px;
+}
+.tri-arm-steps {
+    list-style: none;
+    margin-bottom: 11px;
+}
+.tri-arm-steps li {
+    font-size: 12px;
+    color: var(--text-primary);
+    padding: 3px 0 3px 17px;
+    position: relative;
+    line-height: 1.45;
+}
+.tri-arm-steps li::before {
+    content: '';
+    position: absolute;
+    left: 3px; top: 9px;
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--tri-accent);
+    opacity: .55;
+}
+.tri-arm-eg {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    font-style: italic;
+    display: block;
+    margin-bottom: 9px;
+}
+.tri-arm-state {
+    display: block;
+    font-size: 11.5px;
+    color: var(--tri-accent-dark);
+    background: var(--tri-accent-soft);
+    border-radius: 6px;
+    padding: 6px 9px;
+    line-height: 1.45;
+}
+
+/* ================================================================
+   WORKSPACE
+================================================================ */
+
+#tri-workspace {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+#tri-workspace.hidden { display: none; }
+
+#tri-crumb {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 16px;
+    background: var(--bg-white);
+    border-bottom: 1px solid var(--border);
+    font-size: 12.5px;
+    flex-shrink: 0;
+}
+#tri-back {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 9px;
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--text-secondary);
+}
+#tri-back:hover { border-color: var(--tri-accent); color: var(--tri-accent); }
+#tri-screen-name { font-weight: 700; }
+#tri-arm-name {
+    color: white;
+    background: var(--tri-accent);
+    border-radius: 5px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+#tri-stage {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+}
+
+#tri-rail {
+    width: 216px;
+    flex-shrink: 0;
+    background: var(--bg-white);
+    border-right: 1px solid var(--border);
+    padding: 12px 10px;
+    overflow-y: auto;
+}
+.tri-rail-step {
+    display: flex;
+    gap: 9px;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 9px;
+    cursor: pointer;
+    font: inherit;
+    color: var(--text-secondary);
+}
+.tri-rail-step:hover { background: var(--bg-surface); }
+.tri-rail-step.active { background: var(--tri-accent-soft); color: var(--text-primary); }
+.tri-rail-n {
+    flex-shrink: 0;
+    width: 19px; height: 19px;
+    border-radius: 50%;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    font-size: 10.5px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 1px;
+}
+.tri-rail-step.active .tri-rail-n { background: var(--tri-accent); border-color: var(--tri-accent); color: white; }
+.tri-rail-step.done .tri-rail-n { background: var(--green-subtle); border-color: var(--green-sage); color: var(--green-dark); }
+.tri-rail-text { display: flex; flex-direction: column; gap: 1px; }
+.tri-rail-text strong { font-size: 12.5px; font-weight: 600; }
+.tri-rail-text em { font-style: normal; font-size: 10.5px; color: var(--text-muted); line-height: 1.35; }
+
+#tri-main {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+#tri-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 22px 26px 40px;
+}
+#tri-main.board-mode #tri-body { padding: 12px 14px 20px; }
+
+#tri-side {
+    width: 344px;
+    flex-shrink: 0;
+    background: var(--bg-white);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 14px 15px 30px;
+}
+#tri-side.hidden { display: none; }
+
+/* ================================================================
+   SHARED STEP FURNITURE
+================================================================ */
+
+.tri-step-head { max-width: 760px; margin-bottom: 18px; }
+.tri-step-head h2 { font-size: 20px; font-weight: 700; letter-spacing: -0.2px; margin-bottom: 6px; }
+.tri-step-head p { font-size: 13px; line-height: 1.6; color: var(--text-secondary); }
+
+.tri-h3 {
+    font-size: 13px;
+    font-weight: 700;
+    margin: 22px 0 7px;
+    letter-spacing: -0.1px;
+}
+.tri-h4 {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    color: var(--text-muted);
+    margin: 16px 0 7px;
+}
+.tri-sub { font-size: 12px; line-height: 1.55; color: var(--text-secondary); margin-bottom: 10px; max-width: 680px; }
+.tri-faint { color: var(--text-muted); }
+.tri-mono { font-variant-numeric: tabular-nums; font-size: 11.5px; }
+.tri-foot-note {
+    font-size: 11.5px;
+    line-height: 1.55;
+    color: var(--text-muted);
+    margin-top: 9px;
+    max-width: 760px;
+}
+.tri-foot-note code, .tri-sub code, .tri-callout code {
+    font-size: 11px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    padding: 0 3px;
+    border-radius: 3px;
+}
+
+.tri-callout {
+    background: var(--bg-white);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--green-sage);
+    border-radius: 8px;
+    padding: 11px 14px;
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    margin: 14px 0;
+    max-width: 920px;
+}
+.tri-callout strong { color: var(--text-primary); }
+.tri-callout-warn { border-left-color: var(--warning); background: #fffaf2; }
+.tri-callout-info { border-left-color: var(--green-dark); }
+
+.tri-primary {
+    background: var(--tri-accent);
+    color: white;
+    border: none;
+    border-radius: 7px;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.tri-primary:hover { background: var(--tri-accent-dark); }
+.tri-secondary {
+    background: var(--bg-white);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    color: var(--text-primary);
+}
+.tri-secondary:hover { border-color: var(--tri-accent); color: var(--tri-accent); }
+.tri-secondary.sm { padding: 4px 9px; font-size: 11.5px; }
+
+.tri-input {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 7px 10px;
+    font: inherit;
+    font-size: 12.5px;
+    background: var(--bg-white);
+}
+.tri-input.sm { padding: 5px 9px; font-size: 12px; }
+.tri-input:focus { outline: none; border-color: var(--tri-accent); }
+
+.tri-nav {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-top: 26px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    max-width: 920px;
+}
+.tri-nav-hint { font-size: 12px; color: var(--text-muted); }
+
+/* ---- stat strip ---- */
+.tri-stat-strip {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 4px;
+}
+.tri-stat {
+    background: var(--bg-white);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 13px;
+    min-width: 92px;
+}
+.tri-stat strong { display: block; font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.tri-stat span { font-size: 10.5px; color: var(--text-muted); line-height: 1.3; display: block; }
+
+/* ---- tables ---- */
+.tri-table-wrap {
+    background: var(--bg-white);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    overflow: auto;
+    max-width: 1100px;
+}
+.tri-table-wrap.scroll { max-height: calc(100vh - 230px); }
+.tri-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.tri-table th {
+    text-align: left;
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    color: var(--text-muted);
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-surface);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    white-space: nowrap;
+}
+.tri-table td { padding: 7px 10px; border-bottom: 1px solid #f0ede8; vertical-align: top; }
+.tri-table tbody tr:last-child td { border-bottom: none; }
+.tri-table.dense td { padding: 4px 9px; white-space: nowrap; }
+.tri-table.sm { font-size: 11.5px; }
+.tri-table.sm td { padding: 5px 8px; }
+.tri-table tbody tr[data-pose-card] { cursor: pointer; }
+.tri-table tbody tr[data-pose-card]:hover { background: var(--bg-surface); }
+.tri-table tbody tr.selected { background: var(--tri-accent-soft); }
+.tri-res { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tri-note { font-size: 11.5px; color: var(--text-secondary); line-height: 1.45; max-width: 320px; }
+
+/* ---- interaction families: polar vs hydrophobic, the one distinction ---- */
+.tri-fam {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    white-space: nowrap;
+    border: 1px solid transparent;
+}
+.tri-fam.polar  { background: #e8f0ea; color: var(--green-dark); border-color: #cfdfd3; }
+.tri-fam.phobic { background: var(--bg-surface); color: var(--text-muted); border-color: var(--border); }
+
+/* ---- bars ---- */
+.tri-freq-bar {
+    display: inline-block;
+    width: 110px;
+    height: 7px;
+    background: var(--bg-surface);
+    border-radius: 4px;
+    overflow: hidden;
+    vertical-align: middle;
+    margin-right: 6px;
+}
+.tri-freq-bar.sm { width: 64px; height: 6px; }
+.tri-freq-bar i { display: block; height: 100%; background: var(--green-sage); }
+
+.tri-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 2px 7px;
+    font-variant-numeric: tabular-nums;
+}
+.tri-chip em { font-style: normal; font-weight: 400; color: var(--text-muted); }
+.tri-chip.on  { background: var(--green-subtle); border-color: var(--green-sage); color: var(--green-dark); }
+.tri-chip.off { background: #fdf0ec; border-color: #efcfc5; color: #a1503f; }
+.tri-chip button { background: none; border: none; cursor: pointer; font-size: 13px; line-height: 1; color: inherit; opacity: .7; }
+.tri-chip-btn { cursor: pointer; }
+.tri-chip-btn:hover { border-color: var(--tri-accent); }
+
+/* ---- interaction type pills ---- */
+.tri-itype {
+    display: inline-block;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+/* ================================================================
+   REFERENCE STEP
+================================================================ */
+
+.tri-source-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 14px;
+    max-width: 1000px;
+    margin-bottom: 6px;
+}
+
+/* ================================================================
+   MODES STEP
+================================================================ */
+
+.tri-controls {
+    display: flex;
+    gap: 22px;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    background: var(--bg-white);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 12px 15px;
+    margin-bottom: 16px;
+    max-width: 1000px;
+}
+
+/* ================================================================
+   ROLES / TIERS
+================================================================ */
+
+.tri-guards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 11px;
+    max-width: 1100px;
+}
+
+.tri-seg-row { display: inline-flex; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 2px; gap: 2px; margin-bottom: 14px; }
+.tri-seg-row.sm { margin-bottom: 0; }
+.tri-seg {
+    background: none;
+    border: none;
+    border-radius: 6px;
+    padding: 5px 13px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+.tri-seg.active { background: var(--bg-white); color: var(--tri-accent); box-shadow: 0 1px 3px rgba(0,0,0,.07); }
+
+.tri-tier-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 58px;
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    padding: 3px 9px;
+    border-radius: 5px;
+    color: white;
+    white-space: nowrap;
+}
+.tri-tier-pill.sm { min-width: 20px; padding: 1px 6px; font-size: 10px; }
+.tri-tier-pill.tier-1 { background: var(--tier-1); }
+.tri-tier-pill.tier-2 { background: var(--tier-2); }
+.tri-tier-pill.tier-3 { background: var(--tier-3); }
+.tri-tier-pill.tier-4 { background: var(--tier-4); }
+.tri-tier-pill.tier-OFF { background: var(--tier-5); }
+.tri-tier-pill.tier-NA {
+    background: repeating-linear-gradient(45deg, var(--tier-na), var(--tier-na) 4px, #b3afa8 4px, #b3afa8 8px);
+}
+
+.tri-flag-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 11.5px; }
+.tri-flag {
+    display: inline-flex;
+    gap: 5px;
+    align-items: center;
+    font-size: 10.5px;
+    font-weight: 600;
+    border-radius: 5px;
+    padding: 2px 7px;
+    border: 1px solid var(--border);
+    background: var(--bg-white);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-family: inherit;
+}
+.tri-flag em { font-style: normal; font-variant-numeric: tabular-nums; opacity: .8; }
+.tri-flag.level-warn  { background: #fffaf2; border-color: #ecd9a8; color: #8a6a12; }
+.tri-flag.level-alert { background: #fdeceb; border-color: #efc5c0; color: var(--alert); }
+.tri-flag.on { box-shadow: 0 0 0 1.5px var(--tri-accent); }
+
+/* ================================================================
+   BOARD
+================================================================ */
+
+.tri-board-bar {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    flex-wrap: wrap;
+    padding: 8px 10px;
+    background: var(--bg-white);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    margin-bottom: 10px;
+}
+.tri-board-bar .tri-input.sm { width: 168px; }
+.tri-filter-group { display: flex; gap: 5px; flex-wrap: wrap; }
+.tri-mini-ctrl {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.tri-mini-ctrl input[type="range"] { width: 76px; accent-color: var(--tri-accent); }
+.tri-mini-ctrl strong { font-variant-numeric: tabular-nums; color: var(--text-primary); }
+.tri-board-right { margin-left: auto; display: flex; align-items: center; gap: 10px; font-size: 11.5px; }
+.tri-decided {
+    background: var(--green-subtle);
+    color: var(--green-dark);
+    border-radius: 5px;
+    padding: 3px 8px;
+    font-weight: 600;
+}
+.tri-active-filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 9px; }
+
+.tri-lanes {
+    display: flex;
+    gap: 7px;
+    align-items: stretch;
+    overflow-x: auto;
+    padding-bottom: 8px;
+}
+.tri-lane {
+    flex: 1 1 0;
+    min-width: 140px;
+    display: flex;
+    flex-direction: column;
+    background: #eae7e1;
+    border-radius: 10px;
+    overflow: hidden;
+}
+.tri-lane-head {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 7px 9px;
+    background: var(--bg-white);
+    border-bottom: 1px solid var(--border);
+}
+.tri-lane-top { display: flex; align-items: center; gap: 6px; }
+.tri-lane-sub { font-size: 10px; color: var(--text-muted); line-height: 1.2; }
+.tri-lane-n { margin-left: auto; font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.tri-lane-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 7px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    max-height: calc(100vh - 252px);
+}
+.tri-lane-empty { font-size: 11px; color: var(--text-muted); text-align: center; padding: 10px 0; }
+.tri-lane-more { font-size: 10.5px; color: var(--text-muted); text-align: center; padding: 6px 0; }
+
+.tri-card {
+    background: var(--bg-white);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 8px 6px;
+    cursor: pointer;
+    transition: box-shadow .12s, border-color .12s;
+}
+.tri-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+.tri-card.selected { border-color: var(--tri-accent); box-shadow: 0 0 0 1.5px var(--tri-accent); }
+.tri-card.decided-pick   { border-left: 3px solid var(--tier-1); }
+.tri-card.decided-hold   { border-left: 3px solid var(--tier-3); }
+.tri-card.decided-reject { border-left: 3px solid var(--tier-5); opacity: .62; }
+.tri-card-top { display: flex; align-items: center; justify-content: space-between; gap: 5px; margin-bottom: 3px; }
+.tri-card-id { font-size: 10.5px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.2px; }
+.tri-card-mol {
+    height: 76px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    font-size: 10px;
+}
+.tri-card-mol svg { max-width: 100%; height: auto; }
+.tri-card-cov { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+.tri-cov-bar { flex: 1; height: 5px; background: var(--bg-surface); border-radius: 3px; overflow: hidden; }
+.tri-cov-bar i { display: block; height: 100%; background: var(--green-dark); }
+.tri-cov-text { font-size: 10px; color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tri-card-meta {
+    display: flex;
+    gap: 7px;
+    font-size: 9.5px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    flex-wrap: wrap;
+}
+.tri-card-flags { display: flex; gap: 3px; flex-wrap: wrap; margin-top: 4px; }
+.tri-pip {
+    font-size: 8.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .3px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    cursor: help;
+}
+.tri-pip.level-warn  { background: #fffaf2; border-color: #ecd9a8; color: #8a6a12; }
+.tri-pip.level-alert { background: #fdeceb; border-color: #efc5c0; color: var(--alert); }
+
+.tri-verdict {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: white;
+}
+.tri-verdict.v-pick   { background: var(--tier-1); }
+.tri-verdict.v-hold   { background: var(--tier-3); }
+.tri-verdict.v-reject { background: var(--tier-5); }
+
+/* ---- residue heat map ---- */
+.tri-heat-wrap { background: var(--bg-white); border: 1px solid var(--border); border-radius: 9px; padding: 12px 14px; }
+.tri-heat-scroll { overflow: auto; max-height: calc(100vh - 300px); }
+.tri-heat { border-collapse: collapse; font-size: 11px; }
+.tri-heat th {
+    padding: 2px;
+    position: sticky;
+    top: 0;
+    background: var(--bg-white);
+    z-index: 1;
+}
+.tri-heat th button {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    background: none;
+    border: none;
+    font: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 3px 1px;
+    color: var(--text-secondary);
+    border-radius: 3px;
+}
+.tri-heat th button:hover { background: var(--bg-surface); }
+.tri-heat th button.must    { background: var(--green-subtle); color: var(--green-dark); }
+.tri-heat th button.mustnot { background: #fdf0ec; color: #a1503f; }
+.tri-heat th.tri-heat-corner { font-size: 10px; color: var(--text-muted); text-align: left; padding: 4px 6px; }
+/* A column header carries its residue's role, so key and shell never blur together. */
+.tri-heat th[class*="hrole-"] { border-bottom: 2px solid transparent; }
+.tri-heat th.hrole-gate   { border-bottom-color: var(--green-deep); }
+.tri-heat th.hrole-key    { border-bottom-color: var(--green-dark); }
+.tri-heat th.hrole-reach  { border-bottom-color: #3c5ba8; }
+.tri-heat th.hrole-shell  { border-bottom-color: var(--border); }
+.tri-heat th.hrole-report { border-bottom-color: #efece7; }
+.tri-heat td { padding: 1px 2px; }
+.tri-heat td.tri-mono { padding-right: 8px; white-space: nowrap; }
+.tri-heat tbody tr { cursor: pointer; }
+.tri-heat tbody tr:hover td.tri-mono { color: var(--tri-accent); }
+.tri-heat tbody tr.selected td.tri-mono { font-weight: 700; color: var(--tri-accent); }
+/* The swatch is the cell itself: `display:block` on a <td> would take it out of
+   the table layout and stack the row's cells vertically. */
+.hc { width: 13px; height: 13px; border-radius: 2px; }
+i.hc { display: inline-block; }
+td.hc { padding: 1px; background-clip: content-box; }
+.hc0  { background: #e7e3dc; }
+.hc1  { background: var(--green-sage); }
+.hc2  { background: var(--green-dark); }
+.hc-1 { background: repeating-linear-gradient(45deg, #e2ded7, #e2ded7 2px, #cfcbc3 2px, #cfcbc3 4px); }
+.tri-heat-legend { display: flex; gap: 16px; margin-top: 10px; font-size: 10.5px; color: var(--text-muted); align-items: center; }
+.tri-heat-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.tri-heat-legend i { display: inline-block; }
+
+/* ================================================================
+   INSPECTOR
+================================================================ */
+
+.tri-insp-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 9px; margin-bottom: 9px; }
+.tri-insp-head > div { display: flex; flex-direction: column; gap: 5px; }
+.tri-insp-head h3 { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.tri-insp-head .tri-tier-pill { align-self: flex-start; }
+.tri-insp-mol {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 148px;
+    overflow: hidden;
+    margin-bottom: 10px;
+}
+.tri-insp-mol svg { max-width: 100%; height: auto; }
+.tri-why { font-size: 12px; line-height: 1.55; color: var(--text-secondary); margin-bottom: 11px; }
+.tri-insp-stats { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 11px; }
+.tri-insp-stats .tri-stat { min-width: 76px; padding: 6px 9px; }
+.tri-insp-stats .tri-stat strong { font-size: 13.5px; }
+.tri-insp-flags { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
+.tri-insp-flag {
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--text-muted);
+    border-radius: 7px;
+    padding: 7px 10px;
+    font-size: 11.5px;
+    line-height: 1.5;
+    background: var(--bg-surface);
+}
+.tri-insp-flag strong { display: block; font-size: 11px; margin-bottom: 2px; }
+.tri-insp-flag.level-warn  { border-left-color: var(--warning); background: #fffaf2; }
+.tri-insp-flag.level-alert { border-left-color: var(--alert); background: #fdeceb; }
+
+.tri-decide { display: flex; gap: 6px; margin-bottom: 8px; }
+.tri-verdict-btn {
+    flex: 1;
+    border: 1px solid var(--border);
+    background: var(--bg-white);
+    border-radius: 7px;
+    padding: 7px 0;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: capitalize;
+    cursor: pointer;
+    color: var(--text-secondary);
+}
+.tri-verdict-btn:hover { border-color: var(--text-secondary); }
+.tri-verdict-btn.v-pick.on   { background: var(--tier-1); border-color: var(--tier-1); color: white; }
+.tri-verdict-btn.v-hold.on   { background: var(--tier-3); border-color: var(--tier-3); color: white; }
+.tri-verdict-btn.v-reject.on { background: var(--tier-5); border-color: var(--tier-5); color: white; }
+
+.tri-missed {
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    background: #fdf0ec;
+    border-radius: 6px;
+    padding: 6px 9px;
+    margin-top: 8px;
+}
+
+
+/* ================================================================
+   THE STANDARD — automatic valuation, one starred choice
+================================================================ */
+
+.tri-policy {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    margin-bottom: 16px;
+}
+.tri-policy-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    background: var(--bg-white);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 5px 10px;
+    font-size: 11px;
+}
+.tri-policy-item.absent { opacity: .42; }
+.tri-policy-val { font-weight: 700; font-variant-numeric: tabular-nums; }
+.tri-policy-note { color: var(--text-muted); }
+
+.tri-star {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 15px;
+    line-height: 1;
+    padding: 0 2px;
+    color: #d8d3cb;
+}
+.tri-star:hover { color: var(--tri-accent-line); }
+.tri-star.on { color: var(--tri-accent); }
+.tri-std-table tr.starred { background: var(--tri-accent-soft); }
+.tri-std-table tr.starred .tri-res { color: var(--tri-accent-dark); }
+
+/* ================================================================
+   TIER MAP — the 2×2 the scheme reduces to, and the two lanes outside it
+================================================================ */
+
+.tri-tier-map {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+}
+.tri-map-grid {
+    display: grid;
+    grid-template-columns: 124px minmax(120px, 170px) minmax(120px, 170px);
+    gap: 5px;
+    align-items: stretch;
+}
+.tri-map-corner { }
+.tri-map-col {
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+    color: var(--text-muted);
+    text-align: center;
+    align-self: end;
+    padding-bottom: 3px;
+    line-height: 1.3;
+}
+.tri-map-row {
+    font-size: 11px;
+    color: var(--text-secondary);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    text-align: right;
+    line-height: 1.35;
+    padding-right: 6px;
+}
+.tri-map-row em { font-style: normal; font-size: 10px; color: var(--text-muted); }
+
+.tri-tier-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    align-items: flex-start;
+    text-align: left;
+    border: 1px solid var(--border);
+    border-left-width: 3px;
+    border-radius: 8px;
+    background: var(--bg-white);
+    padding: 8px 10px;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+}
+.tri-tier-cell:hover { border-color: var(--text-secondary); }
+.tri-tier-cell.on { box-shadow: 0 0 0 1.5px var(--tri-accent); border-color: var(--tri-accent); }
+.tri-tier-cell-n { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.tri-tier-cell-t { font-size: 11px; font-weight: 700; }
+.tri-tier-cell-l { font-size: 10px; color: var(--text-muted); line-height: 1.3; }
+.tri-tier-cell.tier-1   { border-left-color: var(--tier-1); }
+.tri-tier-cell.tier-2   { border-left-color: var(--tier-2); }
+.tri-tier-cell.tier-3   { border-left-color: var(--tier-3); }
+.tri-tier-cell.tier-4   { border-left-color: var(--tier-4); }
+.tri-tier-cell.tier-OFF { border-left-color: var(--tier-5); }
+.tri-tier-cell.tier-NA  { border-left-color: var(--tier-na); }
+
+.tri-map-aside {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    max-width: 260px;
+}
+.tri-map-note { font-size: 10.5px; line-height: 1.45; color: var(--text-muted); margin-top: 2px; }
+
+.tri-callout.tri-slim { padding: 8px 12px; font-size: 12px; margin: 0 0 10px; }
+
+/* ================================================================
+   INSPECTOR — maintained / partial / missed / new
+================================================================ */
+
+.tri-ix {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    margin-bottom: 3px;
+    background: var(--bg-surface);
+    border-left: 3px solid transparent;
+}
+.tri-ix .tri-res { font-size: 11.5px; }
+.tri-ix-val { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text-muted); }
+.tri-ix-exact   { border-left-color: var(--tier-1); }
+.tri-ix-partial { border-left-color: var(--tier-3); }
+.tri-ix-missed  { border-left-color: var(--tier-5); opacity: .72; }
+.tri-ix-new     { border-left-color: var(--tri-accent); }
+.tri-newphobic { font-size: 11px; line-height: 1.45; margin-top: 6px; }
+
+/* Heat-map column headers carry polar / hydrophobic and the star. */
+.tri-heat th.hrole-polar  { border-bottom: 2px solid var(--green-dark); }
+.tri-heat th.hrole-phobic { border-bottom: 2px solid var(--border); }
+.tri-heat th.starred button { color: var(--tri-accent); font-weight: 700; }

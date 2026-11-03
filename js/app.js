@@ -208,6 +208,13 @@ const MODES = {
         containerId: 'boltztable-container',
         btnId:       'btn-table',
     },
+    triage: {
+        subtitle:    'Hit Triage',
+        panelTitle:  'Triage',
+        btnClass:    'active-triage',
+        containerId: 'boltztriage-container',
+        btnId:       'btn-triage',
+    },
 };
 
 let currentMode       = 'draw';
@@ -217,6 +224,7 @@ let molstarInitted    = false;
 let boltzSpaceInitted = false;
 let boltzPlotInitted  = false;
 let boltzTableInitted = false;
+let boltzTriageInitted = false;
 
 async function switchMode(mode) {
     if (mode === currentMode) return;
@@ -236,7 +244,8 @@ async function switchMode(mode) {
     });
 
     // Hide shared properties panel in modes that have their own right panel
-    const hidePanel = mode === 'space' || mode === 'plot' || mode === 'table' || !!cfg.ownPanel;
+    const hidePanel = mode === 'space' || mode === 'plot' || mode === 'table' ||
+                      mode === 'triage' || !!cfg.ownPanel;
     document.getElementById('properties-panel').classList.toggle('hidden', hidePanel);
     document.getElementById('panel-toggle').classList.toggle('hidden', hidePanel);
 
@@ -307,6 +316,17 @@ async function switchMode(mode) {
         }
     }
 
+    // Lazy-init BoltzTriage on first switch
+    if (mode === 'triage' && !boltzTriageInitted) {
+        boltzTriageInitted = true;
+        try {
+            const { initBoltzTriage } = await import('./boltztriage.js');
+            initBoltzTriage(RDKit);
+        } catch (err) {
+            console.error('BoltzTriage init failed:', err);
+        }
+    }
+
     // Lazy-init Molstar on first switch to BoltzStar
     if (mode === 'star' && !molstarInitted) {
         molstarInitted = true;
@@ -343,6 +363,7 @@ document.getElementById('btn-star').addEventListener('click',  () => switchMode(
 document.getElementById('btn-space').addEventListener('click', () => switchMode('space'));
 document.getElementById('btn-plot').addEventListener('click',  () => switchMode('plot'));
 document.getElementById('btn-table').addEventListener('click', () => switchMode('table'));
+document.getElementById('btn-triage').addEventListener('click', () => switchMode('triage'));
 
 /**
  * Add a mode at runtime. Used by the optional, gitignored local/ folder, which

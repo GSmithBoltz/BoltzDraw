@@ -14,6 +14,7 @@
     <link rel="stylesheet" href="css/boltzspace.css">
     <link rel="stylesheet" href="css/boltzplot.css">
     <link rel="stylesheet" href="css/boltztable.css">
+    <link rel="stylesheet" href="css/boltztriage.css">
 </head>
 <body>
 
@@ -41,6 +42,9 @@
             </button>
             <button class="mode-btn" id="btn-table">
                 <span class="btn-brand">Boltz</span><span class="btn-product">Table</span>
+            </button>
+            <button class="mode-btn" id="btn-triage">
+                <span class="btn-brand">Boltz</span><span class="btn-product">Triage</span>
             </button>
         </nav>
         <div class="header-divider"></div>
@@ -575,6 +579,86 @@
                     </div>
                 </div>
 
+            </div>
+        </div>
+
+        <!-- BoltzTriage: PLIP-based hit triage -->
+        <div id="boltztriage-container" class="hidden">
+
+            <!-- ===== Stage 1: the screen, then the arm ===== -->
+            <div id="tri-chooser">
+                <div class="tri-chooser-head">
+                    <h1>Triage a screen</h1>
+                    <p>A virtual screen hands you thousands of poses and a score that is not a potency
+                       prediction. Triage is the step that turns them into a mechanism annotation you can
+                       test — and the step that currently lives in a notebook per target.</p>
+                </div>
+
+                <div class="tri-section">
+                    <h2>1 · The screen <em>PLIP results for every pose</em></h2>
+                    <div id="tri-screens"></div>
+                    <div class="tri-upload-row" style="margin-top:14px">
+                        <label class="tri-drop" id="tri-drop">
+                            <input type="file" id="tri-file" accept=".jsonl,.json,.csv,.txt" hidden>
+                            <span>Or load your own PLIP results — <code>.jsonl</code> (one pose per line,
+                                  as <code>run_plip_all.py</code> writes) or a long <code>.csv</code> of
+                                  <code>id,chain,resnr,restype,itype</code>. Optional
+                                  <code>smiles</code>, <code>mw</code> and <code>prob</code> columns light up
+                                  the structure cards, the size adjustment and the confidence read-out.</span>
+                        </label>
+                    </div>
+                    <div id="tri-load-status" class="tri-status" style="display:none"></div>
+                </div>
+
+                <div class="tri-section">
+                    <h2>2 · The approach <em>what do you know about the site?</em></h2>
+                    <div id="tri-arms" class="tri-disabled">
+                        <button class="tri-arm-card" data-arm="reference">
+                            <h2>I have a reference bound</h2>
+                            <p>A small molecule or a peptide sits in the site, in a structure you trust —
+                               or a confirmed hit has a pose you believe. Its PLIP footprint becomes the
+                               standard, and the tiers state a mechanistic claim about each pose.</p>
+                            <ul class="tri-arm-steps">
+                                <li>PLIP the reference, in the same setup as the poses</li>
+                                <li>Give every residue a role — gate, key, reach, shell, off-site</li>
+                                <li>Tier on rules you can carry to the next screen</li>
+                            </ul>
+                            <span class="tri-arm-eg">CRHR2 · GLP-2R · CRBN allosteric · the SS18-SSX hit standards</span>
+                            <span class="tri-arm-state"></span>
+                        </button>
+
+                        <button class="tri-arm-card" data-arm="observed">
+                            <h2>I don't have a reference</h2>
+                            <p>Nothing is bound and no binding mode is known. Profile every pose, look at
+                               what the library actually touches, and let the tiering come out of the
+                               observed interactions — knowing that makes it a hypothesis, not a standard.</p>
+                            <ul class="tri-arm-steps">
+                                <li>Survey the contact frequencies and the size confound</li>
+                                <li>Cluster the poses into consensus binding modes</li>
+                                <li>Promote a mode — or define the pocket by hand — then tier on percentiles</li>
+                            </ul>
+                            <span class="tri-arm-eg">STAT4's second polar cavity · any blind pocket from fpocket</span>
+                            <span class="tri-arm-state"></span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== Stage 2: stepped workspace ===== -->
+            <div id="tri-workspace" class="hidden">
+                <div id="tri-crumb">
+                    <button id="tri-back" title="Back to the screen chooser">← Screens</button>
+                    <span id="tri-screen-name"></span>
+                    <span id="tri-screen-badge" class="tri-badge tri-badge-synthetic hidden">synthetic demo data</span>
+                    <span id="tri-arm-name"></span>
+                </div>
+                <div id="tri-stage">
+                    <div id="tri-rail"></div>
+                    <div id="tri-main"><div id="tri-body"></div></div>
+                    <div id="tri-side" class="hidden">
+                        <div id="tri-side-body"></div>
+                    </div>
+                </div>
             </div>
         </div>
 
