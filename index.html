@@ -346,6 +346,10 @@
                     </div>
                     <div class="bp-advanced-body hidden" id="bp-advanced-body">
                         <label class="bp-checkbox-row">
+                            <input type="checkbox" id="bp-opt-logy">
+                            <span>Log scale Y</span>
+                        </label>
+                        <label class="bp-checkbox-row">
                             <input type="checkbox" id="bp-opt-marginals">
                             <span>Marginal histograms</span>
                         </label>
@@ -359,8 +363,24 @@
                         </label>
                         <label class="bp-checkbox-row">
                             <input type="checkbox" id="bp-opt-stats">
-                            <span>Correlation stats (r, ρ)</span>
+                            <span>Correlation stats (r, ρ, τ)</span>
                         </label>
+                        <label class="bp-checkbox-row">
+                            <input type="checkbox" id="bp-opt-eval">
+                            <span>Classification stats (AUC, top 5/10%)</span>
+                        </label>
+                        <div class="bp-eval-config hidden" id="bp-eval-config">
+                            <div class="bp-eval-row">
+                                <span>Active if Y</span>
+                                <select id="bp-eval-dir" class="bp-eval-input">
+                                    <option value="le">≤</option>
+                                    <option value="ge">≥</option>
+                                </select>
+                                <input type="number" id="bp-eval-thresh" class="bp-eval-input"
+                                       step="any" placeholder="cutoff">
+                            </div>
+                            <span class="bp-eval-hint">X is the score (higher = predicted active). Y values like &gt;10000 count as censored.</span>
+                        </div>
                     </div>
 
                     <button class="star-apply-btn" id="bp-generate-btn">Generate Plot</button>

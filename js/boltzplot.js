@@ -1,7 +1,8 @@
 /**
  * boltzplot.js
  * General-purpose scatter plot: upload CSV/TSV, pick axes, colour, label, SMILES.
- * Advanced: marginal histograms · linear regression · density overlay · correlation stats.
+ * Advanced: marginal histograms · linear regression · density overlay · correlation stats ·
+ * classification stats (X = score, Y = assay value with an activity cutoff: ROC/PR AUC, top-k% precision).
  * Card strip: lasso-select points to compare structures.
  */
 
@@ -9,11 +10,14 @@
 let _RDKit            = null;
 let _data             = [];
 let _cols             = [];
-let _currentPts       = [];      // [{idx, x, y, color, label, smiles}, …]
+let _currentPts       = [];      // [{idx, x, y, yq, color, label, smiles}, …]  yq = '<' | '>' | ''
 let _currentConfig    = null;    // {xCol, yCol, colorCol, labelCol, smilesCol}
 let _highlightIndices = new Set();
 let _initted          = false;
 let _scriptsOk        = false;
+let _ptsGen           = 0;       // bumped per Generate; keys the stats cache
+let _statsCache       = { key: null, stats: null };
+let _cutoffGuessCol   = null;    // Y column the activity cutoff was last guessed for
 
 // ---- Constants ----
 const COLORSCALE = [[0, '#f0ede8'], [0.5, '#67826b'], [1, '#35583d']];
@@ -28,7 +32,12 @@ const PLOTLY_CFG = {
     responsive: true, displayModeBar: true, displaylogo: false,
     modeBarButtonsToRemove: ['sendDataToCloud'],
     toImageButtonOptions: { format: 'png', filename: 'boltzplot', height: 900, width: 1400, scale: 2 },
+    edits: { annotationPosition: true },   // drag the stats box off the points
 };
+
+const BOOT_MAX_N    = 5000;   // above this the CI is narrow and resampling gets slow
+const KENDALL_MAX_N = 5000;   // τ is O(n²)
+const TOP_FRACS     = [0.10, 0.05];
 
 const CDN_SCRIPTS = [
     'https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js',
@@ -73,10 +82,14 @@ function _wireListeners() {
         .addEventListener('click', _toggleAdvanced);
 
     // Live-update toggles when a plot already exists
-    for (const id of ['bp-opt-marginals', 'bp-opt-regression', 'bp-opt-density', 'bp-opt-stats']) {
+    for (const id of ['bp-opt-logy', 'bp-opt-marginals', 'bp-opt-regression', 'bp-opt-density', 'bp-opt-stats',
+                      'bp-opt-eval', 'bp-eval-dir', 'bp-eval-thresh']) {
         document.getElementById(id)
             .addEventListener('change', () => { if (_initted) _redrawTraces(); });
     }
+    document.getElementById('bp-opt-eval').addEventListener('change', e => {
+        document.getElementById('bp-eval-config').classList.toggle('hidden', !e.target.checked);
+    });
 }
 
 function _renderEmptyState() {
@@ -196,11 +209,11 @@ function _generatePlot() {
     const pts = [];
     for (const row of _data) {
         const x = parseFloat(row[xCol]);
-        const y = parseFloat(row[yCol]);
+        const { v: y, q: yq } = _parseCensored(row[yCol]);
         if (isNaN(x) || isNaN(y)) continue;
         pts.push({
             idx:    pts.length,
-            x, y,
+            x, y, yq,
             color:  colorCol  ? row[colorCol]                 : null,
             label:  labelCol  ? String(row[labelCol]  ?? '')  : '',
             smiles: smilesCol ? String(row[smilesCol] ?? '')  : '',
@@ -212,20 +225,53 @@ function _generatePlot() {
     _currentPts    = pts;
     _currentConfig = { xCol, yCol, colorCol, labelCol, smilesCol };
     _highlightIndices = new Set();
+    _ptsGen++;
+    if (yCol !== _cutoffGuessCol) { _applyYHeaderDefaults(yCol); _cutoffGuessCol = yCol; }
+
+    // A log axis would silently drop zeros and negatives, so offer it only when every Y is positive.
+    const logOk = pts.every(p => p.y > 0);
+    const logEl = document.getElementById('bp-opt-logy');
+    logEl.disabled = !logOk;
+    if (!logOk) logEl.checked = false;
+    logEl.closest('label').title = logOk ? '' : 'Y has values ≤ 0';
 
     document.getElementById('bp-highlight-input').value = '';
     document.getElementById('bp-highlight-status').classList.add('hidden');
     document.getElementById('bp-empty-state').classList.add('hidden');
     document.getElementById('bp-plot').classList.remove('hidden');
+    // Show the strip before drawing so Plotly sizes to the space left, not over the strip.
+    document.getElementById('bp-card-strip').classList.remove('hidden');
 
     _redrawTraces();
 
     document.getElementById('bp-highlight-section').classList.remove('hidden');
-    document.getElementById('bp-card-strip').classList.remove('hidden');
     _showCardStripPlaceholder();
 
-    const skipped = _data.length - pts.length;
-    _setStatus(`${pts.length} points${skipped ? ` · ${skipped} skipped` : ''}`, 'success');
+    const skipped  = _data.length - pts.length;
+    const censored = pts.filter(p => p.yq).length;
+    _setStatus(`${pts.length} points${censored ? ` · ${censored} censored` : ''}`
+             + `${skipped ? ` · ${skipped} skipped` : ''}`, 'success');
+}
+
+// Assay values like ">10000" or "<= 0.5" → { v: number, q: '>' | '<' | '' }.
+function _parseCensored(raw) {
+    const s = String(raw ?? '').trim();
+    const m = /^([<>≤≥])=?\s*/.exec(s);
+    if (!m) return { v: parseFloat(s), q: '' };
+    return { v: parseFloat(s.slice(m[0].length)), q: '<≤'.includes(m[1]) ? '<' : '>' };
+}
+
+// Defaults from the Y header: IC50 (nM) → ≤ 1000 on a log axis, (µM) → ≤ 1 on a log axis, pIC50 → ≥ 6.
+function _applyYHeaderDefaults(yCol) {
+    const h = yCol.toLowerCase();
+    let guess = null;
+    if      (/(^|[^a-z])p(ic50|ec50|ac50|xc50|ki|kd)/.test(h)) guess = ['ge', 6];
+    else if (/(^|[^a-z])nm([^a-z]|$)/.test(h))                 guess = ['le', 1000];
+    else if (/(^|[^a-z])[uµμ]m([^a-z]|$)/.test(h))             guess = ['le', 1];
+    if (!guess) return;
+    document.getElementById('bp-eval-dir').value    = guess[0];
+    document.getElementById('bp-eval-thresh').value = guess[1];
+    if (guess[0] === 'le') document.getElementById('bp-opt-logy').checked = true;
 }
 
 function _redrawTraces() {
@@ -240,21 +286,23 @@ function _redrawTraces() {
     const showReg   = document.getElementById('bp-opt-regression').checked;
     const showDens  = document.getElementById('bp-opt-density').checked;
     const showStats = document.getElementById('bp-opt-stats').checked;
+    const showEval  = document.getElementById('bp-opt-eval').checked;
+    const logY      = document.getElementById('bp-opt-logy').checked;   // only enabled when all Y > 0
 
     const traces = [];
-    if (showDens)  traces.push(_buildDensityTrace(xs, ys));
+    if (showDens)  traces.push(_buildDensityTrace(xs, ys, logY));
     traces.push(..._buildScatterTraces(numColor));
     if (showReg) {
-        const reg = _computeRegression(xs, ys);
-        if (reg) traces.push(_buildRegressionTrace(xs, reg));
+        const reg = _computeRegression(xs, logY ? ys.map(Math.log10) : ys);
+        if (reg) traces.push(_buildRegressionTrace(xs, reg, logY));
     }
     if (showMarg) {
         traces.push(_buildTopHistogram(xs));
-        traces.push(_buildRightHistogram(ys));
+        traces.push(logY ? _buildLogRightHistogram(ys) : _buildRightHistogram(ys));
     }
 
-    const stats  = showStats ? _computeCorrelations(xs, ys) : null;
-    const layout = _buildLayout(numColor, showMarg, showReg, stats);
+    const stats  = (showStats || showEval) ? _getStats(showStats, showEval, logY) : null;
+    const layout = _buildLayout(numColor, showMarg, showReg, stats, logY);
     const plotEl = document.getElementById('bp-plot');
 
     if (_initted) {
@@ -292,6 +340,7 @@ function _buildSingleTrace(pts, numColor) {
         mode: 'markers', type: 'scatter',
         marker: {
             size: 7, opacity: 0.8,
+            symbol:     pts.map(_markerSymbol),
             color:      numColor ? pts.map(p => parseFloat(p.color)) : '#35583d',
             colorscale: numColor ? COLORSCALE : undefined,
             showscale:  numColor,
@@ -322,7 +371,7 @@ function _buildCatTraces(pts) {
             x: sub.map(p => p.x), y: sub.map(p => p.y),
             mode: 'markers', type: 'scatter',
             name: cat || '(blank)',
-            marker: { size: 7, opacity: 0.8, color: colorMap[cat],
+            marker: { size: 7, opacity: 0.8, color: colorMap[cat], symbol: sub.map(_markerSymbol),
                       line: { width: 0.5, color: 'rgba(0,0,0,0.18)' } },
             text:          sub.map(p => _hoverText(p)),
             hovertemplate: '%{text}<extra></extra>',
@@ -330,6 +379,11 @@ function _buildCatTraces(pts) {
             xaxis: 'x', yaxis: 'y',
         };
     });
+}
+
+// Censored Y plotted at its limit, pointing the way the true value lies.
+function _markerSymbol(p) {
+    return p.yq === '>' ? 'triangle-up' : p.yq === '<' ? 'triangle-down' : 'circle';
 }
 
 function _buildHighlightTrace(pts) {
@@ -345,10 +399,13 @@ function _buildHighlightTrace(pts) {
     };
 }
 
-function _buildDensityTrace(xs, ys) {
+// Plotly bins histograms linearly even on a log axis, so log Y bins log10(y) itself
+// and contours the grid; the grid is evenly spaced on screen once mapped back with 10^.
+function _buildDensityTrace(xs, ys, logY) {
+    const grid = logY ? _grid2d(xs, ys.map(Math.log10)) : null;
     return {
-        type: 'histogram2dcontour',
-        x: xs, y: ys,
+        ...(grid ? { type: 'contour', x: grid.xc, y: grid.yc.map(v => 10 ** v), z: grid.z }
+                 : { type: 'histogram2dcontour', x: xs, y: ys }),
         xaxis: 'x', yaxis: 'y',
         colorscale: [
             [0,   'rgba(0,0,0,0)'],
@@ -362,15 +419,28 @@ function _buildDensityTrace(xs, ys) {
     };
 }
 
-function _buildRegressionTrace(xs, reg) {
+function _grid2d(xs, ys) {
+    const nb = Math.max(8, Math.min(40, Math.round(Math.sqrt(xs.length))));
+    const x0 = Math.min(...xs), y0 = Math.min(...ys);
+    const wx = (Math.max(...xs) - x0) / nb || 1, wy = (Math.max(...ys) - y0) / nb || 1;
+    const z  = Array.from({ length: nb }, () => new Array(nb).fill(0));
+    for (let i = 0; i < xs.length; i++) {
+        z[Math.min(nb - 1, Math.floor((ys[i] - y0) / wy))][Math.min(nb - 1, Math.floor((xs[i] - x0) / wx))]++;
+    }
+    const centers = (lo, w) => Array.from({ length: nb }, (_, i) => lo + (i + 0.5) * w);
+    return { xc: centers(x0, wx), yc: centers(y0, wy), z };
+}
+
+// On log Y the fit is log10(y) = a + b·x, a straight line on screen.
+function _buildRegressionTrace(xs, reg, logY) {
     const { slope, intercept, r2 } = reg;
     const xMin = Math.min(...xs), xMax = Math.max(...xs);
-    const sign = intercept >= 0 ? '+' : '−';
+    const yAt  = x => (logY ? 10 ** (slope * x + intercept) : slope * x + intercept);
     return {
         x: [xMin, xMax],
-        y: [slope * xMin + intercept, slope * xMax + intercept],
+        y: [yAt(xMin), yAt(xMax)],
         mode: 'lines', type: 'scatter',
-        name: `Trend  R² = ${r2.toFixed(3)}`,
+        name: `Trend  R²${logY ? ' (log₁₀ Y)' : ''} = ${r2.toFixed(3)}`,
         line: { color: '#e05c5c', width: 2, dash: 'dot' },
         hoverinfo: 'skip',
         showlegend: true,
@@ -398,11 +468,32 @@ function _buildRightHistogram(ys) {
     };
 }
 
+// Log-Y version of the right marginal: bin log10(y) and draw the filled step outline,
+// since a histogram trace would bin linearly.
+function _buildLogRightHistogram(ys) {
+    const ls = ys.map(Math.log10);
+    const nb = Math.min(50, Math.max(10, Math.round(ys.length / 8)));
+    const lo = Math.min(...ls);
+    const w  = (Math.max(...ls) - lo) / nb || 1;
+    const counts = new Array(nb).fill(0);
+    for (const l of ls) counts[Math.min(nb - 1, Math.floor((l - lo) / w))]++;
+
+    const x = [0], y = [10 ** lo];
+    counts.forEach((c, i) => { x.push(c, c); y.push(10 ** (lo + i * w), 10 ** (lo + (i + 1) * w)); });
+    x.push(0); y.push(10 ** (lo + nb * w));
+    return {
+        type: 'scatter', mode: 'lines', x, y, fill: 'toself',
+        xaxis: 'x2', yaxis: 'y',
+        line: { color: '#67826b', width: 0.5 }, fillcolor: 'rgba(103,130,107,0.55)',
+        showlegend: false, hoverinfo: 'skip',
+    };
+}
+
 // ================================================================
 // Layout
 // ================================================================
 
-function _buildLayout(numColor, showMarg, showReg, stats) {
+function _buildLayout(numColor, showMarg, showReg, stats, logY) {
     const { xCol, yCol, colorCol } = _currentConfig;
     const showLegend = (!numColor && !!colorCol) || showReg;
     const rNoMarg    = numColor && colorCol ? 80 : 20;
@@ -419,12 +510,13 @@ function _buildLayout(numColor, showMarg, showReg, stats) {
     };
 
     const axisStyle = { showgrid: true, gridcolor: '#ddd9d2', zeroline: false };
+    const yType     = logY ? 'log' : 'linear';
 
     if (showMarg) {
         return {
             ...shared,
             xaxis:  { ...axisStyle, domain: [0, 0.78], title: { text: xCol } },
-            yaxis:  { ...axisStyle, domain: [0, 0.78], title: { text: yCol } },
+            yaxis:  { ...axisStyle, type: yType, domain: [0, 0.78], title: { text: yCol } },
             yaxis2: { domain: [0.82, 1.0], showticklabels: false, showgrid: false, zeroline: false },
             xaxis2: { domain: [0.82, 1.0], showticklabels: false, showgrid: false, zeroline: false },
             margin: { t: 8, r: 8, b: 56, l: 64 },
@@ -434,18 +526,49 @@ function _buildLayout(numColor, showMarg, showReg, stats) {
     return {
         ...shared,
         xaxis:  { ...axisStyle, title: { text: xCol } },
-        yaxis:  { ...axisStyle, title: { text: yCol } },
+        yaxis:  { ...axisStyle, type: yType, title: { text: yCol } },
         margin: { t: 20, r: rNoMarg, b: 56, l: 64 },
     };
 }
 
 function _buildStatsAnnotation(stats) {
-    const { n, pearson, spearman } = stats;
-    const fmt = v => (v == null ? 'n/a' : v.toFixed(3));
+    const fmt   = v => (v == null ? 'n/a' : v.toFixed(3));
+    const ci    = c => (c ? `  [${c[0].toFixed(2)}, ${c[1].toFixed(2)}]` : '');
+    const pct   = v => `${Math.round(v * 100)}%`;
+    const muted = s => `<span style="color:#9a9690">${s}</span>`;
+    const lines = [];
+
+    if ('spearman' in stats) {
+        lines.push(`Pearson r${stats.pearsonLog ? ' (log₁₀ Y)' : ''} = ${fmt(stats.pearson)}`);
+        lines.push(`Spearman ρ = ${fmt(stats.spearman)}${ci(stats.spearmanCI)}`);
+        if (stats.kendall != null) lines.push(`Kendall τ = ${fmt(stats.kendall)}`);
+    }
+    lines.push(`n = ${stats.n}${stats.nCens ? `  (${stats.nCens} censored, at limit)` : ''}`);
+
+    const c = stats.cls;
+    if (c) {
+        lines.push('');
+        if (c.dir) {
+            lines.push(`<b>Active: Y ${c.dir === 'le' ? '≤' : '≥'} ${c.thr}</b>  ·  ${c.n1}/${c.n} (${pct(c.base)})`);
+            if (c.nAmbig) lines.push(muted(`${c.nAmbig} censored across the cutoff, excluded`));
+        }
+        if (c.error) {
+            lines.push(muted(c.error));
+        } else {
+            lines.push(`ROC AUC = ${fmt(c.auc)}${ci(c.aucCI)}`);
+            lines.push(`PR AUC = ${fmt(c.ap)}  ${muted(`(random ${c.base.toFixed(2)})`)}`);
+            for (const t of c.top) {
+                lines.push(`Top ${Math.round(t.f * 100)}%: ${t.hits}/${t.k} active (${pct(t.prec)})  ·  EF ${t.ef.toFixed(1)}×`);
+            }
+        }
+    }
+    if (stats.spearmanCI || stats.cls?.aucCI) lines.push(muted('[ ] 95% bootstrap CI'));
+
     return {
         xref: 'x domain', yref: 'y domain',
-        x: 0.02, y: 0.98, xanchor: 'left', yanchor: 'top',
-        text: `Pearson r = ${fmt(pearson)}<br>Spearman ρ = ${fmt(spearman)}<br>n = ${n}`,
+        x: stats.boxRight ? 0.98 : 0.02, y: 0.98,
+        xanchor: stats.boxRight ? 'right' : 'left', yanchor: 'top',
+        text: lines.join('<br>'),
         align: 'left', showarrow: false,
         font: { size: 11, color: '#1a1a1a' },
         bgcolor: 'rgba(255,255,255,0.85)',
@@ -520,7 +643,7 @@ function _buildCard(p) {
             </div>
             <div class="bp-score-item">
                 <span class="bp-score-lbl">${_esc(yCol)}</span>
-                <span class="bp-score-val">${p.y.toFixed(3)}</span>
+                <span class="bp-score-val">${_esc(p.yq)}${p.y.toFixed(3)}</span>
             </div>
             ${colorCol ? `<div class="bp-score-item bp-score-wide">
                 <span class="bp-score-lbl">${_esc(colorCol)}</span>
@@ -580,12 +703,155 @@ function _computeRegression(xs, ys) {
 // Correlation
 // ================================================================
 
-function _computeCorrelations(xs, ys) {
-    return {
-        n:        xs.length,
-        pearson:  _pearson(xs, ys),
-        spearman: _pearson(_rank(xs), _rank(ys)),
+// Bootstrap makes this slowish, so reuse it across toggles that don't change the inputs.
+function _getStats(showStats, showEval, logY) {
+    const ev  = showEval ? {
+        dir: document.getElementById('bp-eval-dir').value,                 // 'le' | 'ge'
+        thr: parseFloat(document.getElementById('bp-eval-thresh').value),
+    } : null;
+    const key = `${_ptsGen}|${showStats}|${logY}|${ev ? `${ev.dir}${ev.thr}` : ''}`;
+    if (_statsCache.key !== key) _statsCache = { key, stats: _computeStats(showStats, ev, logY) };
+    return _statsCache.stats;
+}
+
+function _computeStats(showStats, ev, logY) {
+    const xs  = _currentPts.map(p => p.x);
+    const ys  = _currentPts.map(p => p.y);
+    const out = { n: xs.length, nCens: _currentPts.filter(p => p.yq).length };
+
+    if (showStats) {
+        // Pearson follows what's on screen (log Y), and raw IC50 spans orders of magnitude,
+        // so a lower-is-better potency gets log10 too.
+        out.pearsonLog = (logY || ev?.dir === 'le') && ys.every(y => y > 0);
+        out.pearson    = _pearson(xs, out.pearsonLog ? ys.map(Math.log10) : ys);
+        out.spearman   = _spearman(xs, ys);
+        out.spearmanCI = _bootstrapCI(xs.length, idx => _spearman(_pick(xs, idx), _pick(ys, idx)));
+        out.kendall    = xs.length <= KENDALL_MAX_N ? _kendallTauB(xs, ys) : null;
+    }
+    if (ev) out.cls = _computeClassification(ev);
+    // Stats box goes in the corner the trend leaves empty (top-right for score vs IC50).
+    out.boxRight = (out.spearman ?? _spearman(xs, ys) ?? 0) < 0;
+    return out;
+}
+
+function _spearman(xs, ys) {
+    return _pearson(_rank(xs), _rank(ys));
+}
+
+// τ-b, tie-corrected (matches scipy.stats.kendalltau).
+function _kendallTauB(xs, ys) {
+    let conc = 0, disc = 0, tieX = 0, tieY = 0;
+    for (let i = 0; i < xs.length; i++) {
+        for (let j = i + 1; j < xs.length; j++) {
+            const dx = Math.sign(xs[i] - xs[j]), dy = Math.sign(ys[i] - ys[j]);
+            if (!dx && !dy) continue;
+            if (!dx) tieX++;
+            else if (!dy) tieY++;
+            else if (dx === dy) conc++;
+            else disc++;
+        }
+    }
+    const den = Math.sqrt((conc + disc + tieX) * (conc + disc + tieY));
+    return den > 0 ? (conc - disc) / den : null;
+}
+
+// ================================================================
+// Classification (X = score, higher = predicted active; Y = assay value)
+// ================================================================
+
+function _computeClassification({ dir, thr }) {
+    if (!Number.isFinite(thr)) return { error: 'Set an activity cutoff for AUC / top-k%' };
+
+    const xs = [], act = [];
+    for (const p of _currentPts) {
+        const a = _isActive(p.y, p.yq, dir, thr);
+        if (a === null) continue;
+        xs.push(p.x); act.push(a);
+    }
+    const n  = xs.length;
+    const n1 = act.filter(Boolean).length;
+    const res = { dir, thr, n, n1, nAmbig: _currentPts.length - n, base: n ? n1 / n : 0 };
+    if (!n1)      return { ...res, error: 'No actives at this cutoff' };
+    if (n1 === n) return { ...res, error: 'Every compound is active at this cutoff' };
+
+    res.auc   = _rocAuc(xs, act);
+    res.aucCI = _bootstrapCI(n, idx => _rocAuc(_pick(xs, idx), _pick(act, idx)));
+    res.ap    = _avgPrecision(xs, act);
+    res.top   = TOP_FRACS.map(f => _topK(xs, act, f, res.base));
+    return res;
+}
+
+// true / false, or null when a censored value sits on the wrong side of the cutoff to tell.
+function _isActive(y, q, dir, thr) {
+    const le   = dir === 'le';
+    const good = le ? y <= thr : y >= thr;
+    if (!q) return good;
+    if ((q === '>') === le) return (le ? y >= thr : y <= thr) ? false : null;   // bound on the inactive side
+    return good ? true : null;
+}
+
+// Mann-Whitney form, tied scores count half (matches sklearn roc_auc_score).
+function _rocAuc(xs, act) {
+    const r = _rank(xs);
+    let n1 = 0, rankSum = 0;
+    for (let i = 0; i < xs.length; i++) if (act[i]) { n1++; rankSum += r[i]; }
+    const n0 = xs.length - n1;
+    if (!n1 || !n0) return null;
+    return (rankSum - n1 * (n1 + 1) / 2) / (n1 * n0);
+}
+
+// Step-wise PR AUC; tied scores form one threshold (matches sklearn average_precision_score).
+function _avgPrecision(xs, act) {
+    const order = xs.map((_, i) => i).sort((a, b) => xs[b] - xs[a]);
+    const n1    = act.filter(Boolean).length;
+    let tp = 0, fp = 0, prevRecall = 0, ap = 0;
+    for (let i = 0; i < order.length; i++) {
+        if (act[order[i]]) tp++; else fp++;
+        if (i + 1 < order.length && xs[order[i + 1]] === xs[order[i]]) continue;
+        const recall = tp / n1;
+        ap += (recall - prevRecall) * tp / (tp + fp);
+        prevRecall = recall;
+    }
+    return ap;
+}
+
+// Precision in the top ⌈f·n⌉ scores; ties at the cut fall back to file order.
+function _topK(xs, act, f, base) {
+    const k     = Math.max(1, Math.ceil(f * xs.length));
+    const order = xs.map((_, i) => i).sort((a, b) => xs[b] - xs[a] || a - b);
+    const hits  = order.slice(0, k).filter(i => act[i]).length;
+    return { f, k, hits, prec: hits / k, ef: hits / k / base };
+}
+
+// Percentile bootstrap 95% CI, seeded so the interval doesn't jitter between redraws.
+function _bootstrapCI(n, stat) {
+    if (n < 5 || n > BOOT_MAX_N) return null;
+    const reps = Math.max(200, Math.min(1000, Math.floor(1e6 / n)));
+    const rand = _mulberry32(1);
+    const idx  = new Array(n);
+    const vals = [];
+    for (let b = 0; b < reps; b++) {
+        for (let i = 0; i < n; i++) idx[i] = Math.floor(rand() * n);
+        const v = stat(idx);
+        if (v != null) vals.push(v);     // e.g. a resample with no actives
+    }
+    if (vals.length < reps / 2) return null;
+    vals.sort((a, b) => a - b);
+    const q = p => vals[Math.min(vals.length - 1, Math.floor(p * vals.length))];
+    return [q(0.025), q(0.975)];
+}
+
+function _mulberry32(seed) {
+    return () => {
+        seed = (seed + 0x6D2B79F5) | 0;
+        let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
+}
+
+function _pick(arr, idx) {
+    return idx.map(i => arr[i]);
 }
 
 function _pearson(xs, ys) {
@@ -625,7 +891,7 @@ function _hoverText(p) {
     const { xCol, yCol, colorCol } = _currentConfig;
     let t = '';
     if (p.label) t += `<b>${_esc(p.label)}</b><br>`;
-    t += `${_esc(xCol)}: ${p.x}<br>${_esc(yCol)}: ${p.y}`;
+    t += `${_esc(xCol)}: ${p.x}<br>${_esc(yCol)}: ${_esc(p.yq)}${p.y}`;
     if (colorCol && p.color != null) t += `<br>${_esc(colorCol)}: ${_esc(String(p.color))}`;
     return t;
 }
